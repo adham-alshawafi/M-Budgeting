@@ -97,9 +97,35 @@ fun DailyTabScreen(
     val currencySymbol by viewModel.currencySymbol.collectAsState()
     val filterType by viewModel.filterType.collectAsState()
     val filterCategory by viewModel.filterCategory.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsState()
+    val selectedPeriod by viewModel.selectedPeriod.collectAsState()
+    val customStartDate by viewModel.customStartDate.collectAsState()
+    val customEndDate by viewModel.customEndDate.collectAsState()
 
-    val formattedDate = remember(selectedDate) {
-        selectedDate.format(DateTimeFormatter.ofPattern("EEEE, MMMM d, yyyy"))
+    val titleText = remember(selectedPeriod) {
+        when (selectedPeriod) {
+            "Daily" -> "Daily"
+            "Weekly" -> "Weekly"
+            "Monthly" -> "Monthly"
+            "Yearly" -> "Yearly"
+            "Custom" -> "Duration"
+            else -> "Daily"
+        }
+    }
+
+    val finalFormattedDate = remember(selectedDate, selectedPeriod, customStartDate, customEndDate) {
+        when (selectedPeriod) {
+            "Daily" -> selectedDate.format(DateTimeFormatter.ofPattern("EEEE, MMM d, yyyy"))
+            "Weekly" -> {
+                val startOfWeek = selectedDate.minusDays((selectedDate.dayOfWeek.value - 1).toLong())
+                val endOfWeek = startOfWeek.plusDays(6)
+                "${startOfWeek.format(DateTimeFormatter.ofPattern("MMM d"))} - ${endOfWeek.format(DateTimeFormatter.ofPattern("MMM d, yyyy"))}"
+            }
+            "Monthly" -> selectedDate.format(DateTimeFormatter.ofPattern("MMMM yyyy"))
+            "Yearly" -> selectedDate.format(DateTimeFormatter.ofPattern("yyyy"))
+            "Custom" -> "${customStartDate.format(DateTimeFormatter.ofPattern("MMM d, yyyy"))} - ${customEndDate.format(DateTimeFormatter.ofPattern("MMM d, yyyy"))}"
+            else -> selectedDate.format(DateTimeFormatter.ofPattern("EEEE, MMMM d, yyyy"))
+        }
     }
 
     Scaffold(
@@ -140,69 +166,189 @@ fun DailyTabScreen(
                     modifier = Modifier
                         .weight(1f)
                         .clickable {
-                            // Date picker
-                            val datePickerDialog = DatePickerDialog(
-                                context,
-                                { _, year, month, dayOfMonth ->
-                                    viewModel.selectDate(LocalDate.of(year, month + 1, dayOfMonth))
-                                },
-                                selectedDate.year,
-                                selectedDate.monthValue - 1,
-                                selectedDate.dayOfMonth
-                            )
-                            datePickerDialog.show()
+                            if (selectedPeriod != "Custom") {
+                                // Date picker
+                                val datePickerDialog = DatePickerDialog(
+                                    context,
+                                    { _, year, month, dayOfMonth ->
+                                        viewModel.selectDate(LocalDate.of(year, month + 1, dayOfMonth))
+                                    },
+                                    selectedDate.year,
+                                    selectedDate.monthValue - 1,
+                                    selectedDate.dayOfMonth
+                                )
+                                datePickerDialog.show()
+                            }
                         }
                 ) {
                     Text(
-                        text = "Daily",
+                        text = titleText,
                         fontSize = 32.sp,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = formattedDate,
+                            text = finalFormattedDate,
                             fontSize = 14.sp,
                             color = TextSecondary,
                             fontWeight = FontWeight.Medium
                         )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Icon(
-                            imageVector = Icons.Default.ArrowDropDown,
-                            contentDescription = "Change Date",
-                            tint = TextSecondary,
-                            modifier = Modifier.size(16.dp)
-                        )
+                        if (selectedPeriod != "Custom") {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(
+                                imageVector = Icons.Default.ArrowDropDown,
+                                contentDescription = "Change Date",
+                                tint = TextSecondary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
                     }
                 }
 
-                // Header filter state indication
-                val isFiltered = filterType != "ALL" || filterCategory != "ALL"
-
-                IconButton(
-                    onClick = onShowFilter,
-                    modifier = Modifier.testTag("filter_button")
+                // Header Filter Area
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    Icon(
-                        imageVector = if (isFiltered) Icons.Default.FilterListOff else Icons.Default.FilterList,
-                        contentDescription = "Filter",
-                        tint = if (isFiltered) NetYellow else TextSecondary
-                    )
-                }
+                    // Custom Duration Selector (on the left of the filter area)
+                    var showDurationDialog by remember { mutableStateOf(false) }
+                    
+                    IconButton(
+                        onClick = { showDurationDialog = true },
+                        modifier = Modifier.testTag("custom_duration_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DateRange,
+                            contentDescription = "Custom Duration",
+                            tint = if (selectedPeriod == "Custom") NetYellow else TextSecondary
+                        )
+                    }
 
-                IconButton(
-                    onClick = onShowSettings,
-                    modifier = Modifier.testTag("settings_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "Settings",
-                        tint = TextSecondary
-                    )
+                    if (showDurationDialog) {
+                        CustomDurationDialog(
+                            viewModel = viewModel,
+                            onDismiss = { showDurationDialog = false }
+                        )
+                    }
+
+                    // Time-Period Filter (Dropdown Menu)
+                    var showPeriodMenu by remember { mutableStateOf(false) }
+                    
+                    Box {
+                        IconButton(
+                            onClick = { showPeriodMenu = true },
+                            modifier = Modifier.testTag("period_filter_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.EventNote,
+                                contentDescription = "Time-Period Filters",
+                                tint = if (selectedPeriod != "Custom") NetYellow else TextSecondary
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = showPeriodMenu,
+                            onDismissRequest = { showPeriodMenu = false },
+                            modifier = Modifier.background(DarkSurface).border(1.dp, SurfaceBorder, RoundedCornerShape(8.dp))
+                        ) {
+                            val periodOptions = listOf("Daily", "Weekly", "Monthly", "Yearly")
+                            periodOptions.forEach { p ->
+                                DropdownMenuItem(
+                                    text = { 
+                                        Text(
+                                            text = p, 
+                                            color = if (selectedPeriod == p) NetYellow else TextPrimary,
+                                            fontWeight = if (selectedPeriod == p) FontWeight.Bold else FontWeight.Normal,
+                                            fontSize = 13.sp
+                                        ) 
+                                    },
+                                    onClick = {
+                                        viewModel.setSelectedPeriod(p)
+                                        showPeriodMenu = false
+                                    },
+                                    modifier = Modifier.testTag("period_option_$p")
+                                )
+                            }
+                        }
+                    }
+
+                    // Header filter state indication
+                    val isFiltered = filterType != "ALL" || filterCategory != "ALL"
+
+                    IconButton(
+                        onClick = onShowFilter,
+                        modifier = Modifier.testTag("filter_button")
+                    ) {
+                        Icon(
+                            imageVector = if (isFiltered) Icons.Default.FilterListOff else Icons.Default.FilterList,
+                            contentDescription = "Filter",
+                            tint = if (isFiltered) NetYellow else TextSecondary
+                        )
+                    }
+
+                    IconButton(
+                        onClick = onShowSettings,
+                        modifier = Modifier.testTag("settings_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Settings,
+                            contentDescription = "Settings",
+                            tint = TextSecondary
+                        )
+                    }
                 }
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Elegant Search Bar
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { viewModel.setSearchQuery(it) },
+                placeholder = { Text("Search transactions or categories...", color = TextSecondary, fontSize = 14.sp) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search Icon",
+                        tint = TextSecondary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(
+                            onClick = { viewModel.setSearchQuery("") },
+                            modifier = Modifier.testTag("clear_search_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Clear search",
+                                tint = TextSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary,
+                    focusedContainerColor = DarkSurface,
+                    unfocusedContainerColor = DarkSurface,
+                    focusedBorderColor = NetYellow,
+                    unfocusedBorderColor = SurfaceBorder,
+                    cursorColor = NetYellow,
+                    focusedPlaceholderColor = TextSecondary,
+                    unfocusedPlaceholderColor = TextSecondary
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("transaction_search_bar")
+            )
+
+            Spacer(modifier = Modifier.height(18.dp))
 
             // STATS BANNER: Responsive Row of 3 Cards (Income, XP, Net)
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
@@ -618,8 +764,8 @@ fun TransactionRowItem(
 fun CalendarTabScreen(viewModel: FinanceViewModel) {
     val selectedDate by viewModel.selectedDate.collectAsState()
     val allTransactions by viewModel.allTransactions.collectAsState()
-    val dailyTransactions by viewModel.dailyTransactions.collectAsState()
-    val dailyStats by viewModel.dailyStats.collectAsState()
+    val dailyTransactions by viewModel.calendarTransactions.collectAsState()
+    val dailyStats by viewModel.calendarStats.collectAsState()
     val currencySymbol by viewModel.currencySymbol.collectAsState()
 
     var currentCalendarMonth by remember { mutableStateOf(YearMonth.from(selectedDate)) }
@@ -2429,7 +2575,12 @@ fun SettingsDialog(
     onDismiss: () -> Unit,
     onCurrencyChange: (String) -> Unit,
     onAlertsToggle: (Boolean) -> Unit,
-    onClearAll: () -> Unit
+    onClearAll: () -> Unit,
+    currentCurrencyCode: String = "USD",
+    isFetchingRates: Boolean = false,
+    apiError: String? = null,
+    lastFetchedTime: Long = 0L,
+    onRefreshRates: () -> Unit = {}
 ) {
     var showConfirmClear by remember { mutableStateOf(false) }
 
@@ -2475,24 +2626,106 @@ fun SettingsDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                // Currency Preference Selection (USD, EUR, GBP)
-                Text("Currency System", fontSize = 13.sp, color = NetYellow, fontWeight = FontWeight.Bold)
+                // Currency Preference Selection (USD, EUR, GBP, JPY, CAD, AUD)
+                Text("Active Currency Display", fontSize = 13.sp, color = NetYellow, fontWeight = FontWeight.Bold)
+                
+                // Live Rates Status Banner
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(DarkSurface, RoundedCornerShape(8.dp))
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    val currencies = listOf("$" to "USD ($)", "€" to "EUR (€)", "£" to "GBP (£)")
-                    currencies.forEach { (symbol, label) ->
-                        val isSelected = currentCurrency == symbol
-                        FilterChip(
-                            selected = isSelected,
-                            onClick = { onCurrencyChange(symbol) },
-                            label = { Text(label, fontSize = 11.sp) },
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = NetYellow.copy(alpha = 0.2f),
-                                selectedLabelColor = NetYellow
-                            )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isFetchingRates) "Updating live rates..." else "Rates via open.er-api.com",
+                            fontSize = 11.sp,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold
                         )
+                        if (apiError != null) {
+                            Text(apiError, fontSize = 9.sp, color = ExpenseRed)
+                        } else if (lastFetchedTime > 0L) {
+                            Text("Updated live exchange rates", fontSize = 10.sp, color = TextSecondary)
+                        } else {
+                            Text("Using default fallback rates", fontSize = 10.sp, color = TextSecondary)
+                        }
+                    }
+                    IconButton(
+                        onClick = onRefreshRates,
+                        enabled = !isFetchingRates,
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Refresh exchange rates",
+                            tint = NetYellow,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                val currencyOptions = listOf(
+                    "USD" to "USD ($)", 
+                    "EUR" to "EUR (€)", 
+                    "GBP" to "GBP (£)",
+                    "JPY" to "JPY (¥)",
+                    "CAD" to "CAD (C$)",
+                    "AUD" to "AUD (A$)"
+                )
+                
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    for (i in currencyOptions.indices step 2) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            for (j in 0..1) {
+                                if (i + j < currencyOptions.size) {
+                                    val (code, label) = currencyOptions[i + j]
+                                    val isSelected = currentCurrencyCode == code
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .background(
+                                                if (isSelected) NetYellow.copy(alpha = 0.15f) else DarkSurface,
+                                                RoundedCornerShape(8.dp)
+                                            )
+                                            .border(
+                                                1.dp,
+                                                if (isSelected) NetYellow else SurfaceBorder,
+                                                RoundedCornerShape(8.dp)
+                                            )
+                                            .clickable { onCurrencyChange(code) }
+                                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                                        contentAlignment = Alignment.CenterStart
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text(
+                                                text = label, 
+                                                fontSize = 12.sp, 
+                                                color = if (isSelected) NetYellow else TextPrimary,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                            )
+                                            if (isSelected) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Check,
+                                                    contentDescription = "Selected",
+                                                    tint = NetYellow,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -2620,4 +2853,218 @@ fun evaluateMathExpression(expr: String): Double? {
     } catch (e: Exception) {
         return null
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CustomDurationDialog(
+    viewModel: FinanceViewModel,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val allTransactions by viewModel.allTransactions.collectAsState()
+    val currencySymbol by viewModel.currencySymbol.collectAsState()
+    val customStart by viewModel.customStartDate.collectAsState()
+    val customEnd by viewModel.customEndDate.collectAsState()
+
+    var startDate by remember { mutableStateOf(customStart) }
+    var endDate by remember { mutableStateOf(customEnd) }
+
+    val filterType by viewModel.filterType.collectAsState()
+    val filterCategory by viewModel.filterCategory.collectAsState()
+
+    val rangeTotals = remember(allTransactions, startDate, endDate, filterType, filterCategory) {
+        val startMilli = startDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val endMilli = endDate.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() - 1
+
+        var totalIncome = 0.0
+        var totalExpense = 0.0
+
+        allTransactions.forEach { t ->
+            if (t.timestamp in startMilli..endMilli) {
+                val matchesType = filterType == "ALL" || t.type == filterType
+                val matchesCategory = filterCategory == "ALL" || t.category.equals(filterCategory, ignoreCase = true)
+                if (matchesType && matchesCategory) {
+                    if (t.type == "INCOME") {
+                        totalIncome += t.amount
+                    } else {
+                        totalExpense += t.amount
+                    }
+                }
+            }
+        }
+        Triple(totalIncome, totalExpense, totalIncome - totalExpense)
+    }
+
+    val (income, expense, net) = rangeTotals
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Default.DateRange, contentDescription = null, tint = NetYellow)
+                Text("Custom Duration Usage", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    viewModel.setCustomDateRange(startDate, endDate)
+                    viewModel.setSelectedPeriod("Custom")
+                    onDismiss()
+                },
+                modifier = Modifier.testTag("apply_custom_range_button")
+            ) {
+                Text("Apply to List", color = NetYellow, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close", color = TextSecondary)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = "Adjust the start and end dates below. The usage summary will update instantly.",
+                    fontSize = 12.sp,
+                    color = TextSecondary
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Start Date Button
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Start Date", fontSize = 11.sp, color = NetYellow, fontWeight = FontWeight.SemiBold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(DarkSurface, RoundedCornerShape(8.dp))
+                                .border(1.dp, SurfaceBorder, RoundedCornerShape(8.dp))
+                                .clickable {
+                                    val picker = DatePickerDialog(
+                                        context,
+                                        { _, y, m, d -> startDate = LocalDate.of(y, m + 1, d) },
+                                        startDate.year,
+                                        startDate.monthValue - 1,
+                                        startDate.dayOfMonth
+                                    )
+                                    picker.show()
+                                }
+                                .padding(12.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = startDate.format(DateTimeFormatter.ofPattern("MMM dd, yyyy")),
+                                fontSize = 12.sp,
+                                color = TextPrimary,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+
+                    // End Date Button
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("End Date", fontSize = 11.sp, color = NetYellow, fontWeight = FontWeight.SemiBold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(DarkSurface, RoundedCornerShape(8.dp))
+                                .border(1.dp, SurfaceBorder, RoundedCornerShape(8.dp))
+                                .clickable {
+                                    val picker = DatePickerDialog(
+                                        context,
+                                        { _, y, m, d -> endDate = LocalDate.of(y, m + 1, d) },
+                                        endDate.year,
+                                        endDate.monthValue - 1,
+                                        endDate.dayOfMonth
+                                    )
+                                    picker.show()
+                                }
+                                .padding(12.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = endDate.format(DateTimeFormatter.ofPattern("MMM dd, yyyy")),
+                                fontSize = 12.sp,
+                                color = TextPrimary,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+
+                if (startDate.isAfter(endDate)) {
+                    Text(
+                        text = "Warning: Start date is after end date!",
+                        color = ExpenseRed,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    )
+                }
+
+                HorizontalDivider(color = SurfaceBorder, modifier = Modifier.padding(vertical = 4.dp))
+
+                Text("Usage Summary", fontSize = 13.sp, color = NetYellow, fontWeight = FontWeight.Bold)
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(DarkSurface, RoundedCornerShape(12.dp))
+                        .border(1.dp, SurfaceBorder, RoundedCornerShape(12.dp))
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    val formattedIncome = formatCurrency(income, currencySymbol)
+                    val formattedExpense = formatCurrency(expense, currencySymbol)
+                    val formattedNet = (if (net >= 0) "+" else "") + formatCurrency(net, currencySymbol)
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Total Income", fontSize = 13.sp, color = TextSecondary)
+                        Text(formattedIncome, fontSize = 14.sp, color = IncomeGreen, fontWeight = FontWeight.Bold)
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Total Expense", fontSize = 13.sp, color = TextSecondary)
+                        Text("-$formattedExpense", fontSize = 14.sp, color = ExpenseRed, fontWeight = FontWeight.Bold)
+                    }
+
+                    HorizontalDivider(color = SurfaceBorder.copy(alpha = 0.5f), modifier = Modifier.padding(vertical = 2.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Net Balance", fontSize = 13.sp, color = TextPrimary, fontWeight = FontWeight.Medium)
+                        Text(
+                            text = formattedNet,
+                            fontSize = 15.sp,
+                            color = if (net >= 0) IncomeGreen else ExpenseRed,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+        },
+        containerColor = DarkBg,
+        shape = RoundedCornerShape(24.dp),
+        modifier = Modifier.border(1.dp, SurfaceBorder, RoundedCornerShape(24.dp))
+    )
 }

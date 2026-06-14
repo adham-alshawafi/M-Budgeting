@@ -104,14 +104,23 @@ class MainActivity : ComponentActivity() {
 
             if (showSettingsDialog) {
               val currencySymbol by viewModel.currencySymbol.collectAsState()
+              val currentCurrencyCode by viewModel.selectedCurrencyCode.collectAsState()
+              val isFetchingRates by viewModel.isFetchingRates.collectAsState()
+              val apiError by viewModel.apiError.collectAsState()
+              val lastFetchedTime by viewModel.lastFetchedTime.collectAsState()
               val budgetAlertsEnabled by viewModel.budgetAlertsEnabled.collectAsState()
               SettingsDialog(
                 currentCurrency = currencySymbol,
                 alertsEnabled = budgetAlertsEnabled,
                 onDismiss = { showSettingsDialog = false },
-                onCurrencyChange = { symbol -> viewModel.setCurrencySymbol(symbol) },
+                onCurrencyChange = { code -> viewModel.setCurrencyCode(code) },
                 onAlertsToggle = { enabled -> viewModel.setBudgetAlertsEnabled(enabled) },
-                onClearAll = { viewModel.clearAllData() }
+                onClearAll = { viewModel.clearAllData() },
+                currentCurrencyCode = currentCurrencyCode,
+                isFetchingRates = isFetchingRates,
+                apiError = apiError,
+                lastFetchedTime = lastFetchedTime,
+                onRefreshRates = { viewModel.fetchExchangeRates() }
               )
             }
 
