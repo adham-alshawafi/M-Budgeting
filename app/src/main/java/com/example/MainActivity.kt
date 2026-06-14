@@ -109,6 +109,13 @@ class MainActivity : ComponentActivity() {
               val apiError by viewModel.apiError.collectAsState()
               val lastFetchedTime by viewModel.lastFetchedTime.collectAsState()
               val budgetAlertsEnabled by viewModel.budgetAlertsEnabled.collectAsState()
+              val syncEnabled by viewModel.syncEnabled.collectAsState()
+              val firebaseUrl by viewModel.firebaseUrl.collectAsState()
+              val syncEmail by viewModel.syncEmail.collectAsState()
+              val isSyncing by viewModel.isSyncing.collectAsState()
+              val lastSyncedTime by viewModel.lastSyncedTime.collectAsState()
+              val syncError by viewModel.syncError.collectAsState()
+
               SettingsDialog(
                 currentCurrency = currencySymbol,
                 alertsEnabled = budgetAlertsEnabled,
@@ -120,15 +127,25 @@ class MainActivity : ComponentActivity() {
                 isFetchingRates = isFetchingRates,
                 apiError = apiError,
                 lastFetchedTime = lastFetchedTime,
-                onRefreshRates = { viewModel.fetchExchangeRates() }
+                onRefreshRates = { viewModel.fetchExchangeRates() },
+                syncEnabled = syncEnabled,
+                onSyncToggle = { enabled -> viewModel.updateSyncEnabled(enabled) },
+                firebaseUrl = firebaseUrl,
+                onUrlChange = { url -> viewModel.updateFirebaseUrl(url) },
+                syncEmail = syncEmail,
+                onEmailChange = { email -> viewModel.updateSyncEmail(email) },
+                isSyncing = isSyncing,
+                lastSyncedTime = lastSyncedTime,
+                syncError = syncError,
+                onManualSync = { viewModel.syncWithWebDatabase() }
               )
             }
 
             if (showAddBudget) {
               AddBudgetDialog(
                 onDismiss = { showAddBudget = false },
-                onSave = { category, limit ->
-                  viewModel.addBudget(category, limit)
+                onSave = { category, limit, alertThreshold ->
+                  viewModel.addBudget(category, limit, alertThreshold)
                 }
               )
             }

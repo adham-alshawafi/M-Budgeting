@@ -101,6 +101,9 @@ fun DailyTabScreen(
     val selectedPeriod by viewModel.selectedPeriod.collectAsState()
     val customStartDate by viewModel.customStartDate.collectAsState()
     val customEndDate by viewModel.customEndDate.collectAsState()
+    val budgetAlerts by viewModel.budgetAlerts.collectAsState()
+    val isDeviceOnline by viewModel.isDeviceOnline.collectAsState()
+    val isSyncing by viewModel.isSyncing.collectAsState()
 
     val titleText = remember(selectedPeriod) {
         when (selectedPeriod) {
@@ -181,12 +184,44 @@ fun DailyTabScreen(
                             }
                         }
                 ) {
-                    Text(
-                        text = titleText,
-                        fontSize = 32.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = titleText,
+                            fontSize = 32.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        // Online / Sync status badge
+                        Box(
+                            modifier = Modifier
+                                .background(
+                                    if (isDeviceOnline) IncomeGreen.copy(alpha = 0.15f) else TextSecondary.copy(alpha = 0.15f),
+                                    RoundedCornerShape(4.dp)
+                                )
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .background(
+                                            if (isDeviceOnline) IncomeGreen else TextSecondary,
+                                            CircleShape
+                                        )
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = if (isSyncing) "Syncing" else if (isDeviceOnline) "Cloud Synced" else "Offline Mode",
+                                    fontSize = 9.sp,
+                                    color = if (isDeviceOnline) IncomeGreen else TextSecondary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = finalFormattedDate,
@@ -348,6 +383,15 @@ fun DailyTabScreen(
                     .testTag("transaction_search_bar")
             )
 
+            if (budgetAlerts.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(14.dp))
+                BudgetAlertsNotificationPanel(
+                    alerts = budgetAlerts,
+                    currencySymbol = currencySymbol,
+                    onNavigateToBudgets = { viewModel.selectTab("Budget") }
+                )
+            }
+
             Spacer(modifier = Modifier.height(18.dp))
 
             // STATS BANNER: Responsive Row of 3 Cards (Income, XP, Net)
@@ -391,12 +435,46 @@ fun DailyTabScreen(
 
             Spacer(modifier = Modifier.height(28.dp))
 
-            Text(
-                text = "Today's Transactions",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = if (selectedPeriod == "Daily") "Today's Transactions" else "Period Transactions",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+                
+                var showRecurringDialog by remember { mutableStateOf(false) }
+                
+                TextButton(
+                    onClick = { showRecurringDialog = true },
+                    modifier = Modifier.testTag("manage_recurring_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Recurring Transactions",
+                        tint = NetYellow,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Recurring",
+                        color = NetYellow,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                
+                if (showRecurringDialog) {
+                    RecurringTransactionsDialog(
+                        viewModel = viewModel,
+                        onDismiss = { showRecurringDialog = false }
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 
@@ -1335,14 +1413,16 @@ fun BudgetTabScreen(
                         val spent = categorySpending[budget.category] ?: 0.0
                         val percentage = if (budget.limitAmount > 0) (spent / budget.limitAmount).toFloat() else 0f
                         val isBreached = spent > budget.limitAmount
+                        val alertThresholdPercent = budget.alertThreshold
+                        val hasExceededThreshold = spent >= (budget.limitAmount * (alertThresholdPercent / 100.0)) && !isBreached
                         val categoryColor = getCategoryColor(budget.category)
 
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .border(
-                                    width = if (isBreached) 1.5.dp else 1.dp,
-                                    color = if (isBreached) ExpenseRed else SurfaceBorder,
+                                    width = if (isBreached || hasExceededThreshold) 1.5.dp else 1.dp,
+                                    color = if (isBreached) ExpenseRed else if (hasExceededThreshold) NetYellow else SurfaceBorder,
                                     shape = RoundedCornerShape(16.dp)
                                 ),
                             colors = CardDefaults.cardColors(containerColor = DarkSurface),
@@ -1399,7 +1479,7 @@ fun BudgetTabScreen(
                                     Text(
                                         text = "Spent: ${formatCurrency(spent, currencySymbol)}",
                                         fontSize = 13.sp,
-                                        color = if (isBreached) ExpenseRed else TextPrimary,
+                                        color = if (isBreached) ExpenseRed else if (hasExceededThreshold) NetYellow else TextPrimary,
                                         fontWeight = FontWeight.Medium
                                     )
                                     Text(
@@ -1418,18 +1498,43 @@ fun BudgetTabScreen(
                                         .fillMaxWidth()
                                         .height(8.dp)
                                         .clip(RoundedCornerShape(4.dp)),
-                                    color = if (isBreached) ExpenseRed else categoryColor,
+                                    color = if (isBreached) ExpenseRed else if (hasExceededThreshold) NetYellow else categoryColor,
                                     trackColor = SurfaceBorder
                                 )
 
-                                if (isBreached) {
-                                    Spacer(modifier = Modifier.height(8.dp))
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     Text(
-                                        text = "⚠️ Budget Limit Breached!",
+                                        text = "Threshold: ${alertThresholdPercent.toInt()}%",
                                         fontSize = 11.sp,
-                                        color = ExpenseRed,
-                                        fontWeight = FontWeight.Bold
+                                        color = TextSecondary
                                     )
+                                    if (isBreached) {
+                                        Text(
+                                            text = "⚠️ Budget Limit Breached!",
+                                            fontSize = 11.sp,
+                                            color = ExpenseRed,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    } else if (hasExceededThreshold) {
+                                        Text(
+                                            text = "⚠️ Threshold Exceeded!",
+                                            fontSize = 11.sp,
+                                            color = NetYellow,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    } else {
+                                        Text(
+                                            text = "Under warning line",
+                                            fontSize = 10.sp,
+                                            color = IncomeGreen,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -2235,10 +2340,11 @@ fun AddTransactionDialog(
 @Composable
 fun AddBudgetDialog(
     onDismiss: () -> Unit,
-    onSave: (category: String, limit: Double) -> Unit
+    onSave: (category: String, limit: Double, alertThreshold: Double) -> Unit
 ) {
     var category by remember { mutableStateOf("Food") }
     var limit by remember { mutableStateOf("") }
+    var alertThreshold by remember { mutableStateOf(80f) } // Default threshold percentage
     val categories = listOf("Food", "Shopping", "Transport", "Utilities", "Entertainment", "Health", "Education", "Other")
 
     AlertDialog(
@@ -2248,7 +2354,7 @@ fun AddBudgetDialog(
                 onClick = {
                     val dLimit = limit.toDoubleOrNull() ?: 0.0
                     if (dLimit > 0) {
-                        onSave(category, dLimit)
+                        onSave(category, dLimit, alertThreshold.toDouble())
                         onDismiss()
                     }
                 },
@@ -2268,7 +2374,7 @@ fun AddBudgetDialog(
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 // Limit Input
                 OutlinedTextField(
@@ -2286,6 +2392,50 @@ fun AddBudgetDialog(
                     ),
                     modifier = Modifier.fillMaxWidth().testTag("budget_limit_input")
                 )
+
+                // Warning Threshold Slider
+                Column {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Alert Threshold",
+                            fontSize = 12.sp,
+                            color = NetYellow,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "${alertThreshold.toInt()}%",
+                            fontSize = 13.sp,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Slider(
+                        value = alertThreshold,
+                        onValueChange = { alertThreshold = it },
+                        valueRange = 50f..100f,
+                        steps = 9, // Increments of 5%
+                        colors = SliderDefaults.colors(
+                            thumbColor = NetYellow,
+                            activeTrackColor = NetYellow,
+                            inactiveTrackColor = SurfaceBorder,
+                            activeTickColor = NetYellow,
+                            inactiveTickColor = SurfaceBorder
+                        ),
+                        modifier = Modifier.fillMaxWidth().testTag("budget_threshold_slider")
+                    )
+                    Text(
+                        text = "Trigger warning when spending exceeds ${alertThreshold.toInt()}% of budget.",
+                        fontSize = 10.sp,
+                        color = TextSecondary
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
 
                 Text(
                     text = "Select Category",
@@ -2580,7 +2730,18 @@ fun SettingsDialog(
     isFetchingRates: Boolean = false,
     apiError: String? = null,
     lastFetchedTime: Long = 0L,
-    onRefreshRates: () -> Unit = {}
+    onRefreshRates: () -> Unit = {},
+    // Cloud Sync Configurations
+    syncEnabled: Boolean = true,
+    onSyncToggle: (Boolean) -> Unit = {},
+    firebaseUrl: String = "",
+    onUrlChange: (String) -> Unit = {},
+    syncEmail: String = "",
+    onEmailChange: (String) -> Unit = {},
+    isSyncing: Boolean = false,
+    lastSyncedTime: Long = 0L,
+    syncError: String? = null,
+    onManualSync: () -> Unit = {}
 ) {
     var showConfirmClear by remember { mutableStateOf(false) }
 
@@ -2751,6 +2912,151 @@ fun SettingsDialog(
                             uncheckedTrackColor = DarkSurface
                         )
                     )
+                }
+
+                HorizontalDivider(color = SurfaceBorder, modifier = Modifier.padding(vertical = 4.dp))
+
+                // --- Cloud Sync Section ---
+                Text("Web Cloud Synchronization", fontSize = 13.sp, color = NetYellow, fontWeight = FontWeight.Bold)
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Enable Real-time Sync", fontSize = 14.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
+                        Text("Connects mobile cache with mbudgeting.netlify.app", fontSize = 11.sp, color = TextSecondary)
+                    }
+                    Switch(
+                        checked = syncEnabled,
+                        onCheckedChange = onSyncToggle,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = NetYellow,
+                            checkedTrackColor = NetYellow.copy(alpha = 0.4f),
+                            uncheckedThumbColor = TextSecondary,
+                            uncheckedTrackColor = DarkSurface
+                        )
+                    )
+                }
+
+                if (syncEnabled) {
+                    var localUrl by remember { mutableStateOf(firebaseUrl) }
+                    var localEmail by remember { mutableStateOf(syncEmail) }
+
+                    LaunchedEffect(firebaseUrl) {
+                        localUrl = firebaseUrl
+                    }
+                    LaunchedEffect(syncEmail) {
+                        localEmail = syncEmail
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = localUrl,
+                            onValueChange = {
+                                localUrl = it
+                                onUrlChange(it)
+                            },
+                            label = { Text("Firebase RTDB Web URL", color = TextSecondary, fontSize = 12.sp) },
+                            placeholder = { Text("https://mbudgeting-default-rtdb.firebaseio.com", color = TextSecondary.copy(alpha = 0.5f)) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary,
+                                focusedBorderColor = NetYellow,
+                                unfocusedBorderColor = SurfaceBorder,
+                                focusedLabelColor = NetYellow,
+                                unfocusedLabelColor = TextSecondary
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        OutlinedTextField(
+                            value = localEmail,
+                            onValueChange = {
+                                localEmail = it
+                                onEmailChange(it)
+                            },
+                            label = { Text("Sync Key / User Email", color = TextSecondary, fontSize = 12.sp) },
+                            placeholder = { Text("adhamalshawafi@gmail.com", color = TextSecondary.copy(alpha = 0.5f)) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary,
+                                focusedBorderColor = NetYellow,
+                                unfocusedBorderColor = SurfaceBorder,
+                                focusedLabelColor = NetYellow,
+                                unfocusedLabelColor = TextSecondary
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        // Status Info Block
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(DarkSurface, RoundedCornerShape(8.dp))
+                                .border(1.dp, SurfaceBorder, RoundedCornerShape(8.dp))
+                                .padding(12.dp)
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text("Synchronization Status", fontSize = 11.sp, color = TextSecondary)
+                                        if (isSyncing) {
+                                            Text("Syncing with cloud database...", fontSize = 13.sp, color = NetYellow, fontWeight = FontWeight.Bold)
+                                        } else if (syncError != null) {
+                                            Text(syncError, fontSize = 12.sp, color = ExpenseRed, fontWeight = FontWeight.Bold)
+                                        } else if (lastSyncedTime > 0L) {
+                                            val dateText = java.time.Instant.ofEpochMilli(lastSyncedTime)
+                                                .atZone(java.time.ZoneId.systemDefault())
+                                                .format(java.time.format.DateTimeFormatter.ofPattern("MMM dd, yyyy - hh:mm a"))
+                                            Text("Synced: $dateText", fontSize = 12.sp, color = IncomeGreen, fontWeight = FontWeight.Bold)
+                                        } else {
+                                            Text("Offline cache active. Never synced yet.", fontSize = 12.sp, color = TextPrimary)
+                                        }
+                                    }
+                                    
+                                    if (isSyncing) {
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        CircularProgressIndicator(
+                                            color = NetYellow,
+                                            modifier = Modifier.size(20.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    Button(
+                                        onClick = onManualSync,
+                                        enabled = !isSyncing,
+                                        colors = ButtonDefaults.buttonColors(containerColor = NetYellow),
+                                        shape = RoundedCornerShape(6.dp),
+                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                                        modifier = Modifier.height(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Sync,
+                                            contentDescription = "Sync",
+                                            tint = DarkBg,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Sync Web Now", color = DarkBg, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 HorizontalDivider(color = SurfaceBorder, modifier = Modifier.padding(vertical = 4.dp))
@@ -3068,3 +3374,667 @@ fun CustomDurationDialog(
         modifier = Modifier.border(1.dp, SurfaceBorder, RoundedCornerShape(24.dp))
     )
 }
+
+// ==========================================
+// RECURRING TRANSACTIONS DIALOG
+// ==========================================
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RecurringTransactionsDialog(
+    viewModel: FinanceViewModel,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val allRecurring by viewModel.allRecurringTransactions.collectAsState()
+    val currencySymbol by viewModel.currencySymbol.collectAsState()
+    
+    var isAdding by remember { mutableStateOf(false) }
+    
+    // Form States
+    var title by remember { mutableStateOf("") }
+    var amountString by remember { mutableStateOf("") }
+    var type by remember { mutableStateOf("EXPENSE") } // INCOME or EXPENSE
+    var category by remember { mutableStateOf("Subscription") }
+    var frequency by remember { mutableStateOf("Monthly") }
+    var startDate by remember { mutableStateOf(LocalDate.now()) }
+    var notes by remember { mutableStateOf("") }
+    var formError by remember { mutableStateOf<String?>(null) }
+    
+    val categoryOptions = listOf("Subscription", "Housing/Rent", "Bills", "Utilities", "Salary", "Food", "Entertainment", "Other")
+    val frequencyOptions = listOf("Daily", "Weekly", "Monthly", "Yearly")
+    
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = null,
+                    tint = NetYellow
+                )
+                Text(
+                    text = if (isAdding) "Create Recurring Item" else "Recurring Bills & Income",
+                    color = TextPrimary,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 20.sp
+                )
+            }
+        },
+        confirmButton = {
+            if (isAdding) {
+                Button(
+                    onClick = {
+                        val amount = amountString.toDoubleOrNull()
+                        if (title.isBlank()) {
+                            formError = "Please enter a title."
+                        } else if (amount == null || amount <= 0) {
+                            formError = "Please enter a valid amount."
+                        } else {
+                            viewModel.addRecurringTransaction(
+                                title = title,
+                                amount = amount,
+                                type = type,
+                                category = category,
+                                frequency = frequency,
+                                startDate = startDate,
+                                notes = notes
+                            )
+                            // Reset state
+                            title = ""
+                            amountString = ""
+                            notes = ""
+                            formError = null
+                            isAdding = false
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = NetYellow, contentColor = Color.Black),
+                    modifier = Modifier.testTag("save_recurring_button")
+                ) {
+                    Text("Save", fontWeight = FontWeight.Bold)
+                }
+            } else {
+                Button(
+                    onClick = { isAdding = true },
+                    colors = ButtonDefaults.buttonColors(containerColor = NetYellow, contentColor = Color.Black),
+                    modifier = Modifier.testTag("new_recurring_fab")
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("New", fontWeight = FontWeight.Bold)
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = {
+                    if (isAdding) {
+                        isAdding = false
+                        formError = null
+                    } else {
+                        onDismiss()
+                    }
+                },
+                modifier = Modifier.testTag("close_recurring_dialog")
+            ) {
+                Text(if (isAdding) "Back" else "Close", color = TextSecondary)
+            }
+        },
+        text = {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 450.dp)
+            ) {
+                if (isAdding) {
+                    // Add Recurring Transaction Form
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(14.dp)
+                    ) {
+                        if (formError != null) {
+                            Text(
+                                text = formError!!,
+                                color = ExpenseRed,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        
+                        // Title Input
+                        OutlinedTextField(
+                            value = title,
+                            onValueChange = { title = it },
+                            label = { Text("Title (e.g. rent, Netflix)", color = TextSecondary) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary,
+                                focusedContainerColor = DarkSurface,
+                                unfocusedContainerColor = DarkSurface,
+                                focusedBorderColor = NetYellow,
+                                unfocusedBorderColor = SurfaceBorder
+                            ),
+                            modifier = Modifier.fillMaxWidth().testTag("recurring_title_input")
+                        )
+                        
+                        // Amount Input
+                        OutlinedTextField(
+                            value = amountString,
+                            onValueChange = { amountString = it },
+                            label = { Text("Amount", color = TextSecondary) },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary,
+                                focusedContainerColor = DarkSurface,
+                                unfocusedContainerColor = DarkSurface,
+                                focusedBorderColor = NetYellow,
+                                unfocusedBorderColor = SurfaceBorder
+                            ),
+                            modifier = Modifier.fillMaxWidth().testTag("recurring_amount_input")
+                        )
+
+                        // Income or Expense Toggle
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(42.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .border(1.dp, SurfaceBorder, RoundedCornerShape(8.dp))
+                                .background(DarkSurface)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .background(if (type == "EXPENSE") ExpenseRedBg else Color.Transparent)
+                                    .clickable { type = "EXPENSE" },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "EXPENSE",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (type == "EXPENSE") ExpenseRed else TextSecondary
+                                )
+                            }
+                            
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .background(if (type == "INCOME") IncomeGreenBg else Color.Transparent)
+                                    .clickable { type = "INCOME" },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "INCOME",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (type == "INCOME") IncomeGreen else TextSecondary
+                                )
+                            }
+                        }
+
+                        // Category Selection Dropdown
+                        var showCategoryDropdown by remember { mutableStateOf(false) }
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = category,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Category", color = TextSecondary) },
+                                trailingIcon = {
+                                    IconButton(onClick = { showCategoryDropdown = true }) {
+                                        Icon(Icons.Default.ArrowDropDown, contentDescription = "Select Category", tint = TextSecondary)
+                                    }
+                                },
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedTextColor = TextPrimary,
+                                    unfocusedTextColor = TextPrimary,
+                                    focusedContainerColor = DarkSurface,
+                                    unfocusedContainerColor = DarkSurface,
+                                    focusedBorderColor = NetYellow,
+                                    unfocusedBorderColor = SurfaceBorder
+                                ),
+                                modifier = Modifier.fillMaxWidth().clickable { showCategoryDropdown = true }
+                            )
+
+                            DropdownMenu(
+                                expanded = showCategoryDropdown,
+                                onDismissRequest = { showCategoryDropdown = false },
+                                modifier = Modifier
+                                    .fillMaxWidth(0.9f)
+                                    .background(DarkSurface)
+                                    .border(1.dp, SurfaceBorder, RoundedCornerShape(8.dp))
+                            ) {
+                                categoryOptions.forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option, color = TextPrimary) },
+                                        onClick = {
+                                            category = option
+                                            showCategoryDropdown = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        // Frequency (Horizontal list of choices)
+                        Column {
+                            Text("Frequency", fontSize = 12.sp, color = TextSecondary, fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                frequencyOptions.forEach { option ->
+                                    val isSelected = frequency == option
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .border(
+                                                width = 1.dp,
+                                                color = if (isSelected) NetYellow else SurfaceBorder,
+                                                shape = RoundedCornerShape(8.dp)
+                                            )
+                                            .background(
+                                                color = if (isSelected) NetYellow.copy(alpha = 0.15f) else Color.Transparent,
+                                                shape = RoundedCornerShape(8.dp)
+                                            )
+                                            .clickable { frequency = option }
+                                            .padding(vertical = 8.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = option,
+                                            fontSize = 11.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSelected) NetYellow else TextSecondary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Start Date DatePicker clicker
+                        OutlinedTextField(
+                            value = startDate.format(DateTimeFormatter.ofPattern("MMMM d, yyyy")),
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Starting Date", color = TextSecondary) },
+                            trailingIcon = {
+                                Icon(Icons.Default.DateRange, contentDescription = null, tint = TextSecondary)
+                            },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary,
+                                focusedContainerColor = DarkSurface,
+                                unfocusedContainerColor = DarkSurface,
+                                focusedBorderColor = NetYellow,
+                                unfocusedBorderColor = SurfaceBorder
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val picker = DatePickerDialog(
+                                        context,
+                                        { _, y, m, d -> startDate = LocalDate.of(y, m + 1, d) },
+                                        startDate.year,
+                                        startDate.monthValue - 1,
+                                        startDate.dayOfMonth
+                                    )
+                                    picker.show()
+                                }
+                        )
+
+                        // Notes Input
+                        OutlinedTextField(
+                            value = notes,
+                            onValueChange = { notes = it },
+                            label = { Text("Notes (optional)", color = TextSecondary) },
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary,
+                                focusedContainerColor = DarkSurface,
+                                unfocusedContainerColor = DarkSurface,
+                                focusedBorderColor = NetYellow,
+                                unfocusedBorderColor = SurfaceBorder
+                            ),
+                            modifier = Modifier.fillMaxWidth().testTag("recurring_notes_input")
+                        )
+                    }
+                } else {
+                    // List Existing Recurring Transactions
+                    if (allRecurring.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 32.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.EventNote,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(48.dp),
+                                    tint = TextSecondary.copy(alpha = 0.5f)
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = "No recurring items configured",
+                                    fontSize = 14.sp,
+                                    color = TextSecondary,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Tap 'New' to set up monthly subscriptions or bills",
+                                    fontSize = 11.sp,
+                                    color = TextSecondary.copy(alpha = 0.7f),
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            items(allRecurring) { item ->
+                                val rate = viewModel.getExchangeRateFor(viewModel.selectedCurrencyCode.value)
+                                val convertedAmount = item.amount * rate
+                                val formattedAmountValue = formatCurrency(convertedAmount, currencySymbol)
+                                val nextDueFormatted = formatEpochMilli(item.nextTriggerTimestamp)
+                                val isIncome = item.type == "INCOME"
+
+                                Card(
+                                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .border(1.dp, SurfaceBorder, RoundedCornerShape(12.dp))
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        // Category icon
+                                        Box(
+                                            modifier = Modifier
+                                                .size(40.dp)
+                                                .clip(CircleShape)
+                                                .background(getCategoryColor(item.category).copy(alpha = 0.15f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = getCategoryIcon(item.category),
+                                                contentDescription = null,
+                                                tint = getCategoryColor(item.category),
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+
+                                        Spacer(modifier = Modifier.width(12.dp))
+
+                                        // Subscription Metadata
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    text = item.title,
+                                                    fontSize = 14.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = TextPrimary,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f, fill = false)
+                                                )
+                                                Spacer(modifier = Modifier.width(6.dp))
+                                                Box(
+                                                    modifier = Modifier
+                                                        .background(
+                                                            color = if (isIncome) IncomeGreenBg else ExpenseRedBg,
+                                                            shape = RoundedCornerShape(4.dp)
+                                                        )
+                                                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                ) {
+                                                    Text(
+                                                        text = item.frequency.uppercase(),
+                                                        fontSize = 8.sp,
+                                                        color = if (isIncome) IncomeGreen else ExpenseRed,
+                                                        fontWeight = FontWeight.Bold
+                                                    )
+                                                }
+                                            }
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = if (isIncome) "+$formattedAmountValue" else "-$formattedAmountValue",
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (isIncome) IncomeGreen else ExpenseRed
+                                            )
+                                            Spacer(modifier = Modifier.height(2.dp))
+                                            Text(
+                                                text = "Next payment: $nextDueFormatted",
+                                                fontSize = 10.sp,
+                                                color = TextSecondary
+                                            )
+                                        }
+
+                                        // Actions: Pause switch & Delete button
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Switch(
+                                                checked = item.isActive,
+                                                onCheckedChange = { active ->
+                                                    viewModel.toggleRecurringTransactionActive(item.id, active, item)
+                                                },
+                                                colors = SwitchDefaults.colors(
+                                                    checkedThumbColor = NetYellow,
+                                                    checkedTrackColor = NetYellow.copy(alpha = 0.3f),
+                                                    uncheckedThumbColor = TextSecondary,
+                                                    uncheckedTrackColor = DarkSurface
+                                                ),
+                                                modifier = Modifier.testTag("toggle_status_${item.id}")
+                                            )
+
+                                            IconButton(
+                                                onClick = { viewModel.deleteRecurringTransaction(item.id) },
+                                                modifier = Modifier.testTag("delete_recurring_${item.id}").size(32.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Delete,
+                                                    contentDescription = "Delete",
+                                                    tint = ExpenseRed.copy(alpha = 0.8f),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        containerColor = DarkBg,
+        shape = RoundedCornerShape(24.dp),
+        modifier = Modifier.border(1.dp, SurfaceBorder, RoundedCornerShape(24.dp))
+    )
+}
+
+fun formatEpochMilli(milli: Long): String {
+    val date = java.time.Instant.ofEpochMilli(milli)
+        .atZone(java.time.ZoneId.systemDefault())
+        .toLocalDate()
+    return date.format(DateTimeFormatter.ofPattern("MMM dd, yyyy"))
+}
+
+// ==========================================
+// BUDGET ALERTS NOTIFICATION PANEL
+// ==========================================
+@Composable
+fun BudgetAlertsNotificationPanel(
+    alerts: List<BudgetAlert>,
+    currencySymbol: String,
+    onNavigateToBudgets: () -> Unit
+) {
+    var isExpanded by remember { mutableStateOf(false) }
+    
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = DarkSurface
+        ),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                width = 1.3.dp,
+                color = if (alerts.any { it.isBreached }) ExpenseRed.copy(alpha = 0.7f) else NetYellow.copy(alpha = 0.7f),
+                shape = RoundedCornerShape(16.dp)
+            )
+            .testTag("budget_alerts_panel")
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.NotificationsActive,
+                        contentDescription = "Alerts",
+                        tint = if (alerts.any { it.isBreached }) ExpenseRed else NetYellow,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "Budget Alerts (${alerts.size})",
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    TextButton(
+                        onClick = { isExpanded = !isExpanded },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.height(28.dp)
+                    ) {
+                        Text(
+                            text = if (isExpanded) "Collapse" else "View All",
+                            color = NetYellow,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    
+                    IconButton(
+                        onClick = onNavigateToBudgets,
+                        modifier = Modifier.size(28.dp).testTag("manage_budgets_alert_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.ArrowForward,
+                            contentDescription = "Configure Budgets",
+                            tint = NetYellow,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+
+            if (isExpanded) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    alerts.forEach { alert ->
+                        val color = if (alert.isBreached) ExpenseRed else NetYellow
+                        val formattedSpent = formatCurrency(alert.spentAmount, currencySymbol)
+                        val formattedLimit = formatCurrency(alert.limitAmount, currencySymbol)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(color.copy(alpha = 0.05f), RoundedCornerShape(8.dp))
+                                .border(0.5.dp, color.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(color)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = alert.category,
+                                        fontSize = 13.sp,
+                                        color = TextPrimary,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Spent $formattedSpent of $formattedLimit",
+                                    fontSize = 11.sp,
+                                    color = TextSecondary
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .background(color.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                            ) {
+                                Text(
+                                    text = if (alert.isBreached) "BREACHED" else "${alert.actualPercent.toInt()}% USED",
+                                    fontSize = 9.sp,
+                                    color = color,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+            } else {
+                val majorAlert = alerts.firstOrNull()
+                if (majorAlert != null) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (majorAlert.isBreached) {
+                            "Warning: '${majorAlert.category}' has exceeded its budget limit!"
+                        } else {
+                            "Notice: '${majorAlert.category}' has exceeded its ${majorAlert.thresholdPercent.toInt()}% warning threshold!"
+                        },
+                        fontSize = 12.sp,
+                        color = if (majorAlert.isBreached) ExpenseRed else NetYellow,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 2.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
