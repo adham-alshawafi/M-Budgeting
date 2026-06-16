@@ -405,6 +405,56 @@ fun DailyTabScreen(
 
             Spacer(modifier = Modifier.height(18.dp))
 
+            // ACCOUNTS SUMMARY PANEL
+            Text(
+                text = "My Accounts",
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = NetYellow
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val cardWidth = (maxWidth - 16.dp) / 3
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val balances by viewModel.accountBalances.collectAsState()
+                    
+                    // Card 1: Cash
+                    AccountSummaryCard(
+                        title = "CASH",
+                        amountString = formatCurrency(balances.cash, currencySymbol),
+                        tintColor = IncomeGreen,
+                        backgroundColor = IncomeGreenBg,
+                        icon = Icons.Default.Payments,
+                        modifier = Modifier.width(cardWidth)
+                    )
+
+                    // Card 2: Savings
+                    AccountSummaryCard(
+                        title = "SAVING",
+                        amountString = formatCurrency(balances.saving, currencySymbol),
+                        tintColor = Purple80,
+                        backgroundColor = Purple40.copy(alpha = 0.15f),
+                        icon = Icons.Default.Savings,
+                        modifier = Modifier.width(cardWidth)
+                    )
+
+                    // Card 3: Credit Card
+                    AccountSummaryCard(
+                        title = "CREDIT",
+                        amountString = formatCurrency(balances.credit, currencySymbol),
+                        tintColor = ExpenseRed,
+                        backgroundColor = ExpenseRedBg,
+                        icon = Icons.Default.CreditCard,
+                        modifier = Modifier.width(cardWidth)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
             // STATS BANNER: Responsive Row of 3 Cards (Income, XP, Net)
             BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                 val cardWidth = (maxWidth - 16.dp) / 3
@@ -692,6 +742,63 @@ fun DailyTabScreen(
 }
 
 @Composable
+fun AccountSummaryCard(
+    title: String,
+    amountString: String,
+    tintColor: Color,
+    backgroundColor: Color,
+    icon: ImageVector,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .border(1.dp, SurfaceBorder, RoundedCornerShape(12.dp)),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(24.dp)
+                    .background(backgroundColor, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = tintColor,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = title,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = amountString,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
 fun StatCard(
     title: String,
     amountString: String,
@@ -753,8 +860,9 @@ fun TransactionRowItem(
     onDelete: () -> Unit,
     currencySymbol: String = "$"
 ) {
-    val categoryColor = getCategoryColor(transaction.category)
-    val categoryIcon = getCategoryIcon(transaction.category)
+    val isTransfer = transaction.type == "TRANSFER"
+    val categoryColor = if (isTransfer) NetYellow else getCategoryColor(transaction.category)
+    val categoryIcon = if (isTransfer) Icons.Default.SwapHoriz else getCategoryIcon(transaction.category)
 
     Card(
         modifier = Modifier
@@ -798,11 +906,28 @@ fun TransactionRowItem(
                 Spacer(modifier = Modifier.height(2.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = transaction.category,
+                        text = if (isTransfer) "Transfer" else transaction.category,
                         fontSize = 12.sp,
                         color = categoryColor,
                         fontWeight = FontWeight.SemiBold
                     )
+                    
+                    // Account badge capsule
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .background(categoryColor.copy(alpha = 0.1f), RoundedCornerShape(4.dp))
+                            .border(1.dp, categoryColor.copy(alpha = 0.25f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 4.dp, vertical = 1.dp)
+                    ) {
+                        Text(
+                            text = if (isTransfer) "${transaction.account} ➜ ${transaction.toAccount ?: "Saving"}" else transaction.account,
+                            fontSize = 9.sp,
+                            color = categoryColor,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
                     if (transaction.notes.isNotEmpty()) {
                         Text(
                             text = " • ${transaction.notes}",
@@ -820,8 +945,18 @@ fun TransactionRowItem(
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.Center
             ) {
-                val prefix = if (transaction.type == "INCOME") "+" else "-"
-                val textColor = if (transaction.type == "INCOME") IncomeGreen else ExpenseRed
+                val prefix = when (transaction.type) {
+                    "INCOME" -> "+"
+                    "EXPENSE" -> "-"
+                    "TRANSFER" -> "⇆ "
+                    else -> ""
+                }
+                val textColor = when (transaction.type) {
+                    "INCOME" -> IncomeGreen
+                    "EXPENSE" -> ExpenseRed
+                    "TRANSFER" -> NetYellow
+                    else -> TextPrimary
+                }
 
                 Text(
                     text = "$prefix${formatCurrency(transaction.amount, currencySymbol)}",
@@ -2337,15 +2472,30 @@ fun parseTransactionFromVoice(spokenText: String): VoiceParsedTransaction? {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddTransactionDialog(
+    viewModel: FinanceViewModel,
     onDismiss: () -> Unit,
-    onSave: (title: String, amount: Double, type: String, category: String, notes: String, timestamp: Long) -> Unit
+    onSave: (title: String, amount: Double, type: String, category: String, notes: String, account: String, toAccount: String?, timestamp: Long) -> Unit
 ) {
     var title by remember { mutableStateOf("") }
     var amount by remember { mutableStateOf("") }
-    var type by remember { mutableStateOf("EXPENSE") } // EXPENSE or INCOME
-    var category by remember { mutableStateOf("Food") }
+    var type by remember { mutableStateOf("EXPENSE") } // EXPENSE, INCOME, or TRANSFER
     var notes by remember { mutableStateOf("") }
     var showCalculator by remember { mutableStateOf(false) }
+
+    // Account states
+    var account by remember { mutableStateOf("Cash") }
+    var toAccount by remember { mutableStateOf<String?>("Saving") }
+
+    val expenseCategories by viewModel.expenseCategories.collectAsState()
+    val incomeCategories by viewModel.incomeCategories.collectAsState()
+
+    val categories = remember(type, expenseCategories, incomeCategories) {
+        if (type == "EXPENSE") expenseCategories else incomeCategories
+    }
+
+    var category by remember(type, expenseCategories, incomeCategories) {
+        mutableStateOf(if (type == "EXPENSE") expenseCategories.firstOrNull() ?: "Food" else incomeCategories.firstOrNull() ?: "Salary")
+    }
 
     // Choose date state
     var selectedDate by remember { mutableStateOf(LocalDate.now()) }
@@ -2417,8 +2567,6 @@ fun AddTransactionDialog(
         }
     }
 
-    val categories = listOf("Food", "Shopping", "Transport", "Utilities", "Entertainment", "Health", "Education", "Other")
-
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
@@ -2428,7 +2576,7 @@ fun AddTransactionDialog(
                     if (title.isNotEmpty() && doubleAmount > 0) {
                         // Pass computed timestamp of chosen date
                         val timestamp = selectedDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                        onSave(title, doubleAmount, type, category, notes, timestamp)
+                        onSave(title, doubleAmount, type, if (type == "TRANSFER") "Transfer" else category, notes, account, if (type == "TRANSFER") toAccount else null, timestamp)
                         onDismiss()
                     }
                 },
@@ -2496,7 +2644,7 @@ fun AddTransactionDialog(
 
                 HorizontalDivider(color = SurfaceBorder, modifier = Modifier.padding(vertical = 4.dp))
 
-                // Type Switcher Button Group
+                // Type Switcher Button Group Supporting INCOME, EXPENSE, TRANSFER
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2514,7 +2662,7 @@ fun AddTransactionDialog(
                     ) {
                         Text(
                             text = "EXPENSE",
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (type == "EXPENSE") ExpenseRed else TextSecondary
                         )
@@ -2529,9 +2677,27 @@ fun AddTransactionDialog(
                     ) {
                         Text(
                             text = "INCOME",
-                            fontSize = 12.sp,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (type == "INCOME") IncomeGreen else TextSecondary
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .background(if (type == "TRANSFER") NetYellowBg else Color.Transparent)
+                            .clickable { 
+                                type = "TRANSFER"
+                                category = "Transfer"
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "TRANSFER",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (type == "TRANSFER") NetYellow else TextSecondary
                         )
                     }
                 }
@@ -2764,49 +2930,161 @@ fun AddTransactionDialog(
                     }
                 }
 
-                // Category dropdown menu trigger (custom selection flow)
-                Text(
-                    text = "Category",
-                    fontSize = 12.sp,
-                    color = NetYellow,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        val firstRow = categories.take(4)
-                        val secondRow = categories.drop(4)
-
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            firstRow.forEach { cat ->
-                                val isSelected = category == cat
-                                FilterChip(
-                                    selected = isSelected,
-                                    onClick = { category = cat },
-                                    label = { Text(cat, fontSize = 11.sp) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = getCategoryColor(cat).copy(alpha = 0.2f),
-                                        selectedLabelColor = getCategoryColor(cat)
+                // Account Selector (For EXPENSE or INCOME)
+                if (type != "TRANSFER") {
+                    Text(
+                        text = if (type == "EXPENSE") "Pay From Account" else "Receive In Account",
+                        fontSize = 12.sp,
+                        color = NetYellow,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf("Cash", "Saving", "Credit").forEach { acc ->
+                            val isSelected = account == acc
+                            val selectedCol = if (type == "EXPENSE") ExpenseRed else IncomeGreen
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .background(
+                                        if (isSelected) selectedCol.copy(alpha = 0.15f) else DarkSurface,
+                                        RoundedCornerShape(8.dp)
                                     )
+                                    .border(
+                                        1.dp,
+                                        if (isSelected) selectedCol else SurfaceBorder,
+                                        RoundedCornerShape(8.dp)
+                                    )
+                                    .clickable { account = acc }
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = acc,
+                                    fontSize = 12.sp,
+                                    color = if (isSelected) selectedCol else TextPrimary,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
                                 )
                             }
                         }
+                    }
 
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            secondRow.forEach { cat ->
-                                val isSelected = category == cat
-                                FilterChip(
-                                    selected = isSelected,
-                                    onClick = { category = cat },
-                                    label = { Text(cat, fontSize = 11.sp) },
-                                    colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = getCategoryColor(cat).copy(alpha = 0.2f),
-                                        selectedLabelColor = getCategoryColor(cat)
-                                    )
-                                )
+                    // Category selection list
+                    Text(
+                        text = "Category",
+                        fontSize = 12.sp,
+                        color = NetYellow,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    val chunks = categories.chunked(3)
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        chunks.forEach { rowItems ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                rowItems.forEach { cat ->
+                                    val isSelected = category == cat
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .background(
+                                                if (isSelected) getCategoryColor(cat).copy(alpha = 0.15f) else DarkSurface,
+                                                RoundedCornerShape(8.dp)
+                                            )
+                                            .border(
+                                                1.dp,
+                                                if (isSelected) getCategoryColor(cat) else SurfaceBorder,
+                                                RoundedCornerShape(8.dp)
+                                            )
+                                            .clickable { category = cat }
+                                            .padding(vertical = 8.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = cat,
+                                            fontSize = 11.sp,
+                                            color = if (isSelected) getCategoryColor(cat) else TextPrimary,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                                if (rowItems.size < 3) {
+                                    repeat(3 - rowItems.size) {
+                                        Box(modifier = Modifier.weight(1f))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Double Column setup for Transfers (Source and Target)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Source Account", fontSize = 11.sp, color = NetYellow, fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            listOf("Cash", "Saving", "Credit").forEach { acc ->
+                                val isSelected = account == acc
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 2.dp)
+                                        .background(
+                                            if (isSelected) NetYellow.copy(alpha = 0.15f) else DarkSurface,
+                                            RoundedCornerShape(8.dp)
+                                        )
+                                        .border(
+                                            1.dp,
+                                            if (isSelected) NetYellow else SurfaceBorder,
+                                            RoundedCornerShape(8.dp)
+                                        )
+                                        .clickable { 
+                                            account = acc
+                                            if (toAccount == acc) {
+                                                toAccount = listOf("Cash", "Saving", "Credit").first { it != acc }
+                                            }
+                                        }
+                                        .padding(vertical = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(acc, fontSize = 12.sp, color = if (isSelected) NetYellow else TextPrimary, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                                }
+                            }
+                        }
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Target Account", fontSize = 11.sp, color = Purple80, fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            listOf("Cash", "Saving", "Credit").forEach { acc ->
+                                val isEnabled = account != acc
+                                val isSelected = toAccount == acc && isEnabled
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 2.dp)
+                                        .background(
+                                            if (isSelected) Purple80.copy(alpha = 0.15f) else if (isEnabled) DarkSurface else DarkSurface.copy(alpha = 0.4f),
+                                            RoundedCornerShape(8.dp)
+                                        )
+                                        .border(
+                                            1.dp,
+                                            if (isSelected) Purple80 else SurfaceBorder,
+                                            RoundedCornerShape(8.dp)
+                                        )
+                                        .clickable(enabled = isEnabled) { toAccount = acc }
+                                        .padding(vertical = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(acc, fontSize = 12.sp, color = if (isSelected) Purple80 else if (isEnabled) TextPrimary else TextSecondary.copy(alpha = 0.4f), fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                                }
                             }
                         }
                     }
@@ -3284,6 +3562,7 @@ fun FilterTransactionsDialog(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsDialog(
+    viewModel: FinanceViewModel,
     currentCurrency: String,
     alertsEnabled: Boolean,
     onDismiss: () -> Unit,
@@ -3308,6 +3587,64 @@ fun SettingsDialog(
     onManualSync: () -> Unit = {}
 ) {
     var showConfirmClear by remember { mutableStateOf(false) }
+
+    val expenseCategories by viewModel.expenseCategories.collectAsState()
+    val incomeCategories by viewModel.incomeCategories.collectAsState()
+
+    var categoryType by remember { mutableStateOf("EXPENSE") } // EXPENSE or INCOME
+    val currentCategories = if (categoryType == "EXPENSE") expenseCategories else incomeCategories
+    var newCategoryName by remember { mutableStateOf("") }
+    var categoryToRename by remember { mutableStateOf<String?>(null) }
+    var renameValue by remember { mutableStateOf("") }
+
+    if (categoryToRename != null) {
+        AlertDialog(
+            onDismissRequest = { categoryToRename = null },
+            title = { Text("Rename Category", color = TextPrimary, fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(
+                    value = renameValue,
+                    onValueChange = { renameValue = it },
+                    label = { Text("Category Name") },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedBorderColor = NetYellow,
+                        unfocusedBorderColor = SurfaceBorder,
+                        focusedLabelColor = NetYellow,
+                        unfocusedLabelColor = TextSecondary
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val oldName = categoryToRename
+                        if (oldName != null && renameValue.trim().isNotEmpty()) {
+                            if (categoryType == "EXPENSE") {
+                                viewModel.renameExpenseCategory(oldName, renameValue.trim())
+                            } else {
+                                viewModel.renameIncomeCategory(oldName, renameValue.trim())
+                            }
+                        }
+                        categoryToRename = null
+                    }
+                ) {
+                    Text("Rename", color = NetYellow, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { categoryToRename = null }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            },
+            containerColor = DarkBg,
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.border(1.dp, SurfaceBorder, RoundedCornerShape(16.dp))
+        )
+    }
 
     if (showConfirmClear) {
         AlertDialog(
@@ -3348,7 +3685,9 @@ fun SettingsDialog(
         },
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 // Currency Preference Selection (USD, EUR, GBP, JPY, CAD, AUD)
@@ -3618,6 +3957,172 @@ fun SettingsDialog(
                                         Text("Sync Web Now", color = DarkBg, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = SurfaceBorder, modifier = Modifier.padding(vertical = 4.dp))
+
+                // Category Management Section
+                Text("Manage Categories", fontSize = 13.sp, color = NetYellow, fontWeight = FontWeight.Bold)
+
+                // Tab Switcher for Expense vs Income Categories
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(32.dp)
+                        .border(1.dp, SurfaceBorder, RoundedCornerShape(16.dp))
+                        .clip(RoundedCornerShape(16.dp))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .background(if (categoryType == "EXPENSE") ExpenseRedBg else Color.Transparent)
+                            .clickable { categoryType = "EXPENSE" },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "EXPENSE",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (categoryType == "EXPENSE") ExpenseRed else TextSecondary
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .background(if (categoryType == "INCOME") IncomeGreenBg else Color.Transparent)
+                            .clickable { categoryType = "INCOME" },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "INCOME",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (categoryType == "INCOME") IncomeGreen else TextSecondary
+                        )
+                    }
+                }
+
+                // Add Category input field
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = newCategoryName,
+                        onValueChange = { newCategoryName = it },
+                        placeholder = { Text("New category name...", fontSize = 12.sp, color = TextSecondary.copy(alpha = 0.5f)) },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedBorderColor = NetYellow,
+                            unfocusedBorderColor = SurfaceBorder,
+                            focusedLabelColor = NetYellow,
+                            unfocusedLabelColor = TextSecondary
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                    )
+                    IconButton(
+                        onClick = {
+                            if (newCategoryName.trim().isNotEmpty()) {
+                                if (categoryType == "EXPENSE") {
+                                    viewModel.addExpenseCategory(newCategoryName.trim())
+                                } else {
+                                    viewModel.addIncomeCategory(newCategoryName.trim())
+                                }
+                                newCategoryName = ""
+                            }
+                        },
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(NetYellow, RoundedCornerShape(8.dp))
+                    ) {
+                        Icon(imageVector = Icons.Default.Add, contentDescription = "Add category", tint = DarkBg)
+                    }
+                }
+
+                // List categories
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(DarkSurface, RoundedCornerShape(12.dp))
+                        .border(1.dp, SurfaceBorder, RoundedCornerShape(12.dp))
+                        .padding(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (currentCategories.isEmpty()) {
+                        Text("No categories. Add one above!", fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(8.dp))
+                    } else {
+                        currentCategories.forEach { cat ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp, horizontal = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .background(getCategoryColor(cat), CircleShape)
+                                    )
+                                    Text(text = cat, fontSize = 13.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
+                                }
+
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    // Rename button
+                                    IconButton(
+                                        onClick = {
+                                            categoryToRename = cat
+                                            renameValue = cat
+                                        },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Edit,
+                                            contentDescription = "Rename $cat",
+                                            tint = NetYellow,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+
+                                    // Remove button
+                                    IconButton(
+                                        onClick = {
+                                            if (categoryType == "EXPENSE") {
+                                                viewModel.deleteExpenseCategory(cat)
+                                            } else {
+                                                viewModel.deleteIncomeCategory(cat)
+                                            }
+                                        },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Delete $cat",
+                                            tint = ExpenseRed,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            if (cat != currentCategories.last()) {
+                                HorizontalDivider(color = SurfaceBorder.copy(alpha = 0.5f))
                             }
                         }
                     }

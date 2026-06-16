@@ -45,7 +45,9 @@ class FirebaseSyncService(
         val timestamp: Long = 0L,
         val notes: String = "",
         val isDeleted: Boolean = false,
-        val lastModified: Long = 0L
+        val lastModified: Long = 0L,
+        val account: String = "Cash",
+        val toAccount: String? = null
     )
 
     data class BudgetDto(
@@ -206,7 +208,9 @@ class FirebaseSyncService(
                 notes = item.notes,
                 syncId = item.syncId,
                 isDeleted = item.isDeleted,
-                lastModified = item.lastModified
+                lastModified = item.lastModified,
+                account = item.account,
+                toAccount = item.toAccount
             )
             repository.insertTransaction(entity)
         }
@@ -514,7 +518,9 @@ class FirebaseSyncService(
         timestamp = timestamp,
         notes = notes,
         isDeleted = isDeleted,
-        lastModified = lastModified
+        lastModified = lastModified,
+        account = account,
+        toAccount = toAccount
     )
 
     private fun BudgetEntity.toDto() = BudgetDto(

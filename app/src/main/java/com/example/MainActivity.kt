@@ -82,9 +82,10 @@ class MainActivity : ComponentActivity() {
             // Dialogs
             if (showAddTransaction) {
               AddTransactionDialog(
+                viewModel = viewModel,
                 onDismiss = { showAddTransaction = false },
-                onSave = { title, amount, type, category, notes, timestamp ->
-                  viewModel.addTransaction(title, amount, type, category, notes, timestamp)
+                onSave = { title, amount, type, category, notes, account, toAccount, timestamp ->
+                  viewModel.addTransaction(title, amount, type, category, notes, account, toAccount, timestamp)
                 }
               )
             }
@@ -117,6 +118,7 @@ class MainActivity : ComponentActivity() {
               val syncError by viewModel.syncError.collectAsState()
 
               SettingsDialog(
+                viewModel = viewModel,
                 currentCurrency = currencySymbol,
                 alertsEnabled = budgetAlertsEnabled,
                 onDismiss = { showSettingsDialog = false },

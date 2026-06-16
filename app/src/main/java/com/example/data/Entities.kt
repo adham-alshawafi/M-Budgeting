@@ -8,13 +8,15 @@ data class TransactionEntity(
     @PrimaryKey(autoGenerate = true) val id: Int = 0,
     val title: String,
     val amount: Double,
-    val type: String, // "INCOME" or "EXPENSE"
+    val type: String, // "INCOME", "EXPENSE", or "TRANSFER"
     val category: String,
     val timestamp: Long,
     val notes: String = "",
     val syncId: String = java.util.UUID.randomUUID().toString(),
     val isDeleted: Boolean = false,
-    val lastModified: Long = System.currentTimeMillis()
+    val lastModified: Long = System.currentTimeMillis(),
+    val account: String = "Cash", // "Cash", "Credit", "Saving"
+    val toAccount: String? = null // For TRANSFER type
 )
 
 @Entity(tableName = "budgets")

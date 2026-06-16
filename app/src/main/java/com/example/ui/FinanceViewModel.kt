@@ -220,6 +220,117 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         transactions.map { it.copy(amount = it.amount * rate) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    // Dynamic Categories Configuration & Management
+    private val defaultExpenseCategories = listOf("Food", "Shopping", "Transport", "Utilities", "Entertainment", "Health", "Education", "Other")
+    private val defaultIncomeCategories = listOf("Salary", "Bonus", "Investments", "Refund", "Gifts", "Other")
+
+    private val _expenseCategories = MutableStateFlow(loadCategories("expense_categories", defaultExpenseCategories))
+    val expenseCategories: StateFlow<List<String>> = _expenseCategories.asStateFlow()
+
+    private val _incomeCategories = MutableStateFlow(loadCategories("income_categories", defaultIncomeCategories))
+    val incomeCategories: StateFlow<List<String>> = _incomeCategories.asStateFlow()
+
+    private fun loadCategories(key: String, defaults: List<String>): List<String> {
+        val str = sharedPrefs.getString(key, null) ?: return defaults
+        return if (str.isEmpty()) emptyList() else str.split(",")
+    }
+
+    private fun saveCategories(key: String, list: List<String>) {
+        sharedPrefs.edit().putString(key, list.joinToString(",")).apply()
+    }
+
+    fun addExpenseCategory(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isNotEmpty() && trimmed !in _expenseCategories.value) {
+            val newList = _expenseCategories.value + trimmed
+            _expenseCategories.value = newList
+            saveCategories("expense_categories", newList)
+        }
+    }
+
+    fun deleteExpenseCategory(name: String) {
+        val newList = _expenseCategories.value.filter { it != name }
+        _expenseCategories.value = newList
+        saveCategories("expense_categories", newList)
+    }
+
+    fun renameExpenseCategory(oldName: String, newName: String) {
+        val trimmed = newName.trim()
+        if (trimmed.isNotEmpty() && oldName in _expenseCategories.value && trimmed !in _expenseCategories.value) {
+            val newList = _expenseCategories.value.map { if (it == oldName) trimmed else it }
+            _expenseCategories.value = newList
+            saveCategories("expense_categories", newList)
+        }
+    }
+
+    fun addIncomeCategory(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isNotEmpty() && trimmed !in _incomeCategories.value) {
+            val newList = _incomeCategories.value + trimmed
+            _incomeCategories.value = newList
+            saveCategories("income_categories", newList)
+        }
+    }
+
+    fun deleteIncomeCategory(name: String) {
+        val newList = _incomeCategories.value.filter { it != name }
+        _incomeCategories.value = newList
+        saveCategories("income_categories", newList)
+    }
+
+    fun renameIncomeCategory(oldName: String, newName: String) {
+        val trimmed = newName.trim()
+        if (trimmed.isNotEmpty() && oldName in _incomeCategories.value && trimmed !in _incomeCategories.value) {
+            val newList = _incomeCategories.value.map { if (it == oldName) trimmed else it }
+            _incomeCategories.value = newList
+            saveCategories("income_categories", newList)
+        }
+    }
+
+    // Account Balances State Flow - Dynamically tracks Cash, Credit, Saving with transfer support
+    val accountBalances: StateFlow<AccountBalances> = allTransactions.map { list ->
+        var cash = 0.0
+        var credit = 0.0
+        var saving = 0.0
+        
+        list.filter { !it.isDeleted }.forEach { t ->
+            val amt = t.amount
+            
+            // Process source account
+            when (t.type) {
+                "INCOME" -> {
+                    when (t.account) {
+                        "Cash" -> cash += amt
+                        "Credit" -> credit += amt
+                        "Saving" -> saving += amt
+                    }
+                }
+                "EXPENSE" -> {
+                    when (t.account) {
+                        "Cash" -> cash -= amt
+                        "Credit" -> credit -= amt
+                        "Saving" -> saving -= amt
+                    }
+                }
+                "TRANSFER" -> {
+                    // Subtract from source
+                    when (t.account) {
+                        "Cash" -> cash -= amt
+                        "Credit" -> credit -= amt
+                        "Saving" -> saving -= amt
+                    }
+                    // Add to destination
+                    when (t.toAccount) {
+                        "Cash" -> cash += amt
+                        "Credit" -> credit += amt
+                        "Saving" -> saving += amt
+                    }
+                }
+            }
+        }
+        AccountBalances(cash = cash, credit = credit, saving = saving)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AccountBalances())
+
     // Filtering States
     private val _filterType = MutableStateFlow("ALL") // "ALL", "INCOME", "EXPENSE"
     val filterType: StateFlow<String> = _filterType.asStateFlow()
@@ -379,7 +490,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         list.forEach { t ->
             if (t.type == "INCOME") {
                 income += t.amount
-            } else {
+            } else if (t.type == "EXPENSE") {
                 expense += t.amount
             }
         }
@@ -414,7 +525,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         list.forEach { t ->
             if (t.type == "INCOME") {
                 income += t.amount
-            } else {
+            } else if (t.type == "EXPENSE") {
                 expense += t.amount
             }
         }
@@ -453,7 +564,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         list.forEach { t ->
             if (t.type == "INCOME") {
                 income += t.amount
-            } else {
+            } else if (t.type == "EXPENSE") {
                 expense += t.amount
             }
         }
@@ -506,7 +617,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // Actions
-    fun addTransaction(title: String, amount: Double, type: String, category: String, notes: String, timestamp: Long = System.currentTimeMillis()) {
+    fun addTransaction(title: String, amount: Double, type: String, category: String, notes: String, account: String = "Cash", toAccount: String? = null, timestamp: Long = System.currentTimeMillis()) {
         viewModelScope.launch {
             val rate = getExchangeRateFor(_selectedCurrencyCode.value)
             val baseAmount = amount / rate
@@ -517,7 +628,9 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     type = type,
                     category = category,
                     timestamp = timestamp,
-                    notes = notes
+                    notes = notes,
+                    account = account,
+                    toAccount = toAccount
                 )
             )
             triggerSyncIfEnabled()
@@ -707,6 +820,12 @@ data class DailyStats(
     val income: Double = 0.0,
     val expense: Double = 0.0,
     val net: Double = 0.0
+)
+
+data class AccountBalances(
+    val cash: Double = 0.0,
+    val credit: Double = 0.0,
+    val saving: Double = 0.0
 )
 
 data class BudgetAlert(
