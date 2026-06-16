@@ -1225,6 +1225,15 @@ fun MonthlyTabScreen(viewModel: FinanceViewModel) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        if (spendByCategory.isNotEmpty()) {
+            RechartsStyleSpendingBarChart(
+                spendByCategory = spendByCategory,
+                totalExpense = totalExpense,
+                currencySymbol = currencySymbol,
+                modifier = Modifier.padding(bottom = 24.dp).testTag("recharts_spending_bar_chart")
+            )
+        }
+
         Text(
             text = "Expense Breakdown",
             fontSize = 18.sp,
@@ -1558,6 +1567,280 @@ fun BudgetTabScreen(
                     }
                 }
                 Spacer(modifier = Modifier.height(64.dp))
+            }
+        }
+    }
+}
+
+// ==========================================
+// 8.5. RECHARTS-INSPIRED INTERACTIVE SPENDING BAR CHART
+// ==========================================
+fun formatCurrencyWithAbbreviation(amount: Double, symbol: String, abbreviate: Boolean = false): String {
+    if (!abbreviate) {
+        return formatCurrency(amount, symbol)
+    }
+    return if (amount >= 1000.0) {
+        String.format(Locale.US, "%s%.1fk", symbol, amount / 1000.0)
+    } else {
+        String.format(Locale.US, "%s%.0f", symbol, amount)
+    }
+}
+
+@Composable
+fun RechartsStyleSpendingBarChart(
+    spendByCategory: List<Pair<String, Double>>,
+    totalExpense: Double,
+    currencySymbol: String,
+    modifier: Modifier = Modifier
+) {
+    if (spendByCategory.isEmpty()) return
+
+    var hoveredCategory by remember { mutableStateOf<String?>(null) }
+
+    // Synchronize default selection on launch
+    LaunchedEffect(spendByCategory) {
+        if (hoveredCategory == null || spendByCategory.none { it.first == hoveredCategory }) {
+            hoveredCategory = spendByCategory.firstOrNull()?.first
+        }
+    }
+
+    val maxAmount = remember(spendByCategory) {
+        spendByCategory.maxOfOrNull { it.second }?.coerceAtLeast(1.0) ?: 100.0
+    }
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .border(1.dp, SurfaceBorder, RoundedCornerShape(24.dp)),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(24.dp)
+    ) {
+        Column(modifier = Modifier.padding(18.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Spending Distribution",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    Text(
+                        text = "Interactive, Tap bars to inspect",
+                        fontSize = 11.sp,
+                        color = TextSecondary
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .background(NetYellow.copy(alpha = 0.12f), RoundedCornerShape(6.dp))
+                        .border(0.5.dp, NetYellow.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = "Interactive Chart",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = NetYellow
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Main Bar graph container
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp),
+                contentAlignment = Alignment.BottomStart
+            ) {
+                // Background ticks/grid lines (Y-axis)
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    repeat(5) { step ->
+                        val ratio = 1f - (step.toFloat() / 4f)
+                        val gridValue = maxAmount * ratio
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = formatCurrencyWithAbbreviation(gridValue, currencySymbol, abbreviate = true),
+                                fontSize = 9.sp,
+                                color = TextSecondary.copy(alpha = 0.6f),
+                                modifier = Modifier.width(42.dp),
+                                maxLines = 1
+                            )
+                            HorizontalDivider(
+                                color = SurfaceBorder.copy(alpha = 0.15f),
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+
+                // Interactive Bar Columns
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(start = 46.dp, end = 8.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    spendByCategory.forEach { (category, amount) ->
+                        val categoryColor = getCategoryColor(category)
+                        val barHeightFraction = (amount / maxAmount).toFloat().coerceIn(0.02f, 1f)
+                        val isSelected = hoveredCategory == category
+
+                        Column(
+                            modifier = Modifier
+                                .width(44.dp)
+                                .clickable { hoveredCategory = category }
+                                .padding(top = 8.dp)
+                                .testTag("recharts_bar_${category.lowercase()}"),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Bottom
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp),
+                                contentAlignment = Alignment.BottomCenter
+                            ) {
+                                // Background highlight tint pillar
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(
+                                            color = if (isSelected) categoryColor.copy(alpha = 0.05f) else Color.Transparent,
+                                            shape = RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp)
+                                        )
+                                )
+
+                                // Custom styled Recharts vertical bar with vertical gradient
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .fillMaxHeight(barHeightFraction)
+                                        .background(
+                                            brush = Brush.verticalGradient(
+                                                colors = if (isSelected) {
+                                                    listOf(categoryColor, categoryColor.copy(alpha = 0.60f))
+                                                } else {
+                                                    listOf(categoryColor.copy(alpha = 0.85f), categoryColor.copy(alpha = 0.40f))
+                                                }
+                                            ),
+                                            shape = RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp)
+                                        )
+                                        .border(
+                                            width = if (isSelected) 1.5.dp else 0.dp,
+                                            color = if (isSelected) categoryColor else Color.Transparent,
+                                            shape = RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp)
+                                        )
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // X-axis Category Icon Badge
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .background(
+                                        color = if (isSelected) categoryColor.copy(alpha = 0.2f) else DarkBg,
+                                        shape = CircleShape
+                                    )
+                                    .border(
+                                        width = if (isSelected) 1.dp else 0.5.dp,
+                                        color = if (isSelected) categoryColor else SurfaceBorder,
+                                        shape = CircleShape
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = getCategoryIcon(category),
+                                    contentDescription = category,
+                                    tint = if (isSelected) categoryColor else TextSecondary,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Tooltip-style interactive data display sheet
+            hoveredCategory?.let { activeCat ->
+                val activeAmt = spendByCategory.firstOrNull { it.first == activeCat }?.second ?: 0.0
+                val activePercent = if (totalExpense > 0) (activeAmt / totalExpense).toFloat() else 0f
+                val activeColor = getCategoryColor(activeCat)
+
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(DarkBg, RoundedCornerShape(14.dp))
+                        .border(1.dp, activeColor.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                        .padding(14.dp)
+                        .testTag("recharts_tooltip_panel"),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(activeColor.copy(alpha = 0.15f), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = getCategoryIcon(activeCat),
+                                contentDescription = activeCat,
+                                tint = activeColor,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                text = activeCat,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = "${String.format(Locale.US, "%.1f", activePercent * 100)}% of total expenses",
+                                fontSize = 11.sp,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = formatCurrency(activeAmt, currencySymbol),
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = activeColor
+                        )
+                        Text(
+                            text = "Spent this month",
+                            fontSize = 11.sp,
+                            color = TextSecondary
+                        )
+                    }
+                }
             }
         }
     }
