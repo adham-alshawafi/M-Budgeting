@@ -38,6 +38,11 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.example.data.*
 import com.example.ui.theme.*
+import android.content.Intent
+import android.speech.RecognizerIntent
+import android.app.Activity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.YearMonth
@@ -1961,6 +1966,87 @@ fun NotesTabScreen(
     }
 }
 
+// Voice transaction parser types and helper
+data class VoiceParsedTransaction(
+    val title: String,
+    val amount: Double,
+    val type: String,
+    val category: String
+)
+
+fun parseTransactionFromVoice(spokenText: String): VoiceParsedTransaction? {
+    val text = spokenText.lowercase(Locale.US)
+    
+    // 1. Detect Type
+    val isIncome = text.contains("salary") || text.contains("earned") || text.contains("income") || 
+                   text.contains("received") || text.contains("paycheck") || text.contains("gift") || 
+                   text.contains("dividends") || text.contains("interest") || text.contains("refund")
+    val type = if (isIncome) "INCOME" else "EXPENSE"
+    
+    // 2. Extract amount
+    val numberPattern = """\d+(\.\d+)?""".toRegex()
+    val match = numberPattern.find(text)
+    var parsedAmount = 0.0
+    if (match != null) {
+        parsedAmount = match.value.toDoubleOrNull() ?: 0.0
+    } else {
+        val wordNumbers = mapOf(
+            "one" to 1.0, "two" to 2.0, "three" to 3.0, "four" to 4.0, "five" to 5.0,
+            "six" to 6.0, "seven" to 7.0, "eight" to 8.0, "nine" to 9.0, "ten" to 10.0,
+            "twenty" to 20.0, "thirty" to 30.0, "forty" to 40.0, "fifty" to 50.0, "hundred" to 100.0
+        )
+        for ((word, valDouble) in wordNumbers) {
+            if (text.contains(word)) {
+                parsedAmount = valDouble
+                break
+            }
+        }
+    }
+    
+    // 3. Match category
+    val categoryList = listOf("Food", "Shopping", "Transport", "Utilities", "Entertainment", "Health", "Education", "Other")
+    var parsedCategory = "Other"
+    
+    val categorySynonyms = mapOf(
+        "Food" to listOf("food", "grocery", "groceries", "restaurant", "lunch", "dinner", "breakfast", "coffee", "starbucks", "mcdonald", "eat", "snack"),
+        "Shopping" to listOf("shopping", "clothe", "clothes", "shoe", "shoes", "amazon", "purchase", "bought", "store"),
+        "Transport" to listOf("transport", "bus", "uber", "taxi", "train", "subway", "flight", "gas", "fuel", "car", "parking"),
+        "Utilities" to listOf("utilities", "water", "electricity", "electric", "power", "internet", "phone", "bill", "rent", "gas bill"),
+        "Entertainment" to listOf("entertainment", "movie", "cinema", "netflix", "concert", "game", "gaming", "pub", "bar", "party", "club"),
+        "Health" to listOf("health", "medicine", "doctor", "dentist", "hospital", "pharma", "pharmacy", "medical", "clinic"),
+        "Education" to listOf("education", "book", "course", "tuition", "school", "class", "training")
+    )
+    
+    outer@ for (cat in categoryList) {
+        val synonyms = categorySynonyms[cat] ?: continue
+        for (syn in synonyms) {
+            if (text.contains(syn)) {
+                parsedCategory = cat
+                break@outer
+            }
+        }
+    }
+    
+    // 4. Extract title
+    val keywordsToRemove = listOf("spent", "earned", "dollars", "dollar", "euros", "euro", "on", "for", "a", "an", "the", "at", "to", "from")
+    var words = text.split(" ").toMutableList()
+    words.removeAll { it.matches("""\d+(\.\d+)?""".toRegex()) }
+    words.removeAll { keywordsToRemove.contains(it) }
+    
+    val parsedTitle = words.joinToString(" ").replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() }.trim()
+    
+    return if (parsedAmount > 0.0) {
+        VoiceParsedTransaction(
+            title = parsedTitle.ifEmpty { "Audio Transaction" },
+            amount = parsedAmount,
+            type = type,
+            category = parsedCategory
+        )
+    } else {
+        null
+    }
+}
+
 // ==========================================
 // 6. POPUPS & DIALOGS
 // ==========================================
@@ -1982,6 +2068,70 @@ fun AddTransactionDialog(
     var selectedDate by remember { mutableStateOf(LocalDate.now()) }
     val computedDayOfWeek = remember(selectedDate) {
         selectedDate.dayOfWeek.getDisplayName(TextStyle.FULL, Locale.getDefault())
+    }
+
+    val context = LocalContext.current
+
+    // Launcher for voice title input
+    val titleSpeechLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val matches = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            if (!matches.isNullOrEmpty()) {
+                title = matches[0]
+            }
+        }
+    }
+
+    // Launcher for notes input
+    val notesSpeechLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val matches = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            if (!matches.isNullOrEmpty()) {
+                val spokenText = matches[0]
+                notes = if (notes.isEmpty()) spokenText else "$notes $spokenText"
+            }
+        }
+    }
+
+    // Launcher for full sentence quick logging voice command
+    val transactionVoiceLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val matches = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            if (!matches.isNullOrEmpty()) {
+                val spokenText = matches[0]
+                val parsed = parseTransactionFromVoice(spokenText)
+                if (parsed != null) {
+                    title = parsed.title
+                    amount = parsed.amount.toString()
+                    type = parsed.type
+                    category = parsed.category
+                    notes = "Logged via voice: \"$spokenText\""
+                    android.widget.Toast.makeText(context, "Filled: ${parsed.title} (${parsed.amount})", android.widget.Toast.LENGTH_SHORT).show()
+                } else {
+                    title = spokenText
+                    android.widget.Toast.makeText(context, "Speech copied to Title. Please manually set budget/amount.", android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    val startSpeechToText = { launcher: androidx.activity.result.ActivityResultLauncher<Intent>, prompt: String ->
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            putExtra(RecognizerIntent.EXTRA_PROMPT, prompt)
+        }
+        try {
+            launcher.launch(intent)
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(context, "Voice recognition is not supported on this device.", android.widget.Toast.LENGTH_SHORT).show()
+        }
     }
 
     val categories = listOf("Food", "Shopping", "Transport", "Utilities", "Entertainment", "Health", "Education", "Other")
@@ -2019,6 +2169,50 @@ fun AddTransactionDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                // Quick Voice Logger card button
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(NetYellow.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+                        .border(1.dp, NetYellow.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+                        .clickable { startSpeechToText(transactionVoiceLauncher, "Say e.g., 'Spent fifteen dollars on coffee'...") }
+                        .padding(12.dp)
+                        .testTag("voice_logger_button")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Mic,
+                            contentDescription = "Voice Log",
+                            tint = NetYellow,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Quick Voice Logger",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = NetYellow
+                            )
+                            Text(
+                                text = "Tap & say: 'spent 45 for groceries'",
+                                fontSize = 11.sp,
+                                color = TextSecondary
+                            )
+                        }
+                        Icon(
+                            imageVector = Icons.Default.ChevronRight,
+                            contentDescription = "Go",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+
+                HorizontalDivider(color = SurfaceBorder, modifier = Modifier.padding(vertical = 4.dp))
+
                 // Type Switcher Button Group
                 Row(
                     modifier = Modifier
@@ -2064,6 +2258,15 @@ fun AddTransactionDialog(
                     value = title,
                     onValueChange = { title = it },
                     label = { Text("Title") },
+                    trailingIcon = {
+                        IconButton(onClick = { startSpeechToText(titleSpeechLauncher, "Speak transaction title...") }) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "Voice entry for title",
+                                tint = NetYellow
+                            )
+                        }
+                    },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = TextPrimary,
                         unfocusedTextColor = TextPrimary,
@@ -2331,6 +2534,15 @@ fun AddTransactionDialog(
                     value = notes,
                     onValueChange = { notes = it },
                     label = { Text("Notes (optional)") },
+                    trailingIcon = {
+                        IconButton(onClick = { startSpeechToText(notesSpeechLauncher, "Speak transaction notes...") }) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "Voice entry for notes",
+                                tint = NetYellow
+                            )
+                        }
+                    },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = TextPrimary,
                         unfocusedTextColor = TextPrimary,
@@ -2339,7 +2551,7 @@ fun AddTransactionDialog(
                         focusedBorderColor = NetYellow,
                         unfocusedBorderColor = SurfaceBorder
                     ),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("transaction_notes_input")
                 )
             }
         },
@@ -2516,6 +2728,45 @@ fun AddNoteDialog(
         selectedDate.dayOfWeek.getDisplayName(java.time.format.TextStyle.FULL, Locale.getDefault())
     }
 
+    val context = LocalContext.current
+
+    // Speech recognition launchers for Title & Content
+    val titleSpeechLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val matches = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            if (!matches.isNullOrEmpty()) {
+                title = matches[0]
+            }
+        }
+    }
+
+    val contentSpeechLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val matches = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            if (!matches.isNullOrEmpty()) {
+                val spokenText = matches[0]
+                content = if (content.isEmpty()) spokenText else "$content $spokenText"
+            }
+        }
+    }
+
+    val startSpeechToText = { launcher: androidx.activity.result.ActivityResultLauncher<Intent>, prompt: String ->
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            putExtra(RecognizerIntent.EXTRA_PROMPT, prompt)
+        }
+        try {
+            launcher.launch(intent)
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(context, "Voice recording/Recognizer not supported on this device", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
@@ -2549,6 +2800,15 @@ fun AddNoteDialog(
                     value = title,
                     onValueChange = { title = it },
                     label = { Text("Note Title") },
+                    trailingIcon = {
+                        IconButton(onClick = { startSpeechToText(titleSpeechLauncher, "Speak your note title...") }) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "Voice input for Title",
+                                tint = NetYellow
+                            )
+                        }
+                    },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = TextPrimary,
                         unfocusedTextColor = TextPrimary,
@@ -2617,6 +2877,15 @@ fun AddNoteDialog(
                     onValueChange = { content = it },
                     label = { Text("Content / Reflection") },
                     minLines = 3,
+                    trailingIcon = {
+                        IconButton(onClick = { startSpeechToText(contentSpeechLauncher, "Speak your note description...") }) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "Voice input for description content",
+                                tint = NetYellow
+                            )
+                        }
+                    },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = TextPrimary,
                         unfocusedTextColor = TextPrimary,
