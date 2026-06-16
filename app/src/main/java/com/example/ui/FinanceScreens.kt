@@ -392,6 +392,12 @@ fun DailyTabScreen(
                 )
             }
 
+            Spacer(modifier = Modifier.height(14.dp))
+            MonthlyBudgetProgressCard(
+                viewModel = viewModel,
+                modifier = Modifier.testTag("monthly_budget_progress_card")
+            )
+
             Spacer(modifier = Modifier.height(18.dp))
 
             // STATS BANNER: Responsive Row of 3 Cards (Income, XP, Net)
@@ -1359,6 +1365,12 @@ fun BudgetTabScreen(
             )
 
             Spacer(modifier = Modifier.height(24.dp))
+
+            MonthlyBudgetProgressCard(
+                viewModel = viewModel,
+                onSetBudgetClick = onShowAddBudget,
+                modifier = Modifier.padding(bottom = 24.dp).testTag("monthly_budget_progress_card_tab")
+            )
 
             if (monthlyBudgets.isNotEmpty()) {
                 BudgetBarChartCard(
@@ -4031,6 +4043,229 @@ fun BudgetAlertsNotificationPanel(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(horizontal = 2.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// 8. MONTHLY BUDGET PROGRESS COMPONENT
+// ==========================================
+@Composable
+fun MonthlyBudgetProgressCard(
+    viewModel: FinanceViewModel,
+    modifier: Modifier = Modifier,
+    onSetBudgetClick: (() -> Unit)? = null
+) {
+    val monthlyBudgets by viewModel.monthlyBudgets.collectAsState()
+    val monthlyTransactions by viewModel.monthlyTransactions.collectAsState()
+    val currencySymbol by viewModel.currencySymbol.collectAsState()
+
+    // 1. Calculate aggregated predefined budget limit
+    val totalBudgetLimit = remember(monthlyBudgets) {
+        monthlyBudgets.sumOf { it.limitAmount }
+    }
+
+    // 2. Calculate current month's spending (all EXPENSE transactions)
+    val totalSpending = remember(monthlyTransactions) {
+        monthlyTransactions.filter { it.type == "EXPENSE" }.sumOf { it.amount }
+    }
+
+    // 3. Amount left / remaining
+    val amountLeft = totalBudgetLimit - totalSpending
+    val progress = if (totalBudgetLimit > 0.0) (totalSpending / totalBudgetLimit).toFloat() else 0f
+    
+    // 4. Color states for visual feedback
+    val isLimitBreached = totalSpending > totalBudgetLimit && totalBudgetLimit > 0
+    val isNearLimit = totalSpending >= (totalBudgetLimit * 0.8) && !isLimitBreached && totalBudgetLimit > 0
+
+    val progressColor = when {
+        isLimitBreached -> ExpenseRed
+        isNearLimit -> NetYellow
+        else -> IncomeGreen
+    }
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .border(
+                width = 1.dp,
+                color = if (isLimitBreached) ExpenseRed.copy(alpha = 0.5f) else if (isNearLimit) NetYellow.copy(alpha = 0.5f) else SurfaceBorder,
+                shape = RoundedCornerShape(16.dp)
+            ),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .background(progressColor.copy(alpha = 0.15f), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isLimitBreached) Icons.Default.Warning else Icons.Default.PieChart,
+                            contentDescription = "Budget Status",
+                            tint = progressColor,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "Monthly Budget Tracker",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextPrimary
+                        )
+                        Text(
+                            text = "Overall predefined budget summary",
+                            fontSize = 11.sp,
+                            color = TextSecondary
+                        )
+                    }
+                }
+
+                // Small badge highlighting status
+                Box(
+                    modifier = Modifier
+                        .background(
+                            if (totalBudgetLimit <= 0.0) TextSecondary.copy(alpha = 0.1f)
+                            else if (isLimitBreached) ExpenseRed.copy(alpha = 0.15f)
+                            else if (isNearLimit) NetYellow.copy(alpha = 0.15f)
+                            else IncomeGreen.copy(alpha = 0.15f),
+                            RoundedCornerShape(6.dp)
+                        )
+                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text(
+                        text = if (totalBudgetLimit <= 0.0) "No Budget"
+                               else if (isLimitBreached) "Limit Breached"
+                               else if (isNearLimit) "Approaching Limit"
+                               else "On Track",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (totalBudgetLimit <= 0.0) TextSecondary
+                                else if (isLimitBreached) ExpenseRed
+                                else if (isNearLimit) NetYellow
+                                else IncomeGreen
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            if (totalBudgetLimit <= 0.0) {
+                // If no budget limit has been set, guide the user elegantly with a button to go set one
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Establish your first budget goal to actively monitor spending limit tracks.",
+                        fontSize = 12.sp,
+                        color = TextSecondary,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Button(
+                        onClick = { onSetBudgetClick?.invoke() ?: viewModel.selectTab("Budget") },
+                        colors = ButtonDefaults.buttonColors(containerColor = NetYellow),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text("Set Budget", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            } else {
+                // Display spending vs budget limit details
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    Column {
+                        Text(
+                            text = "Remaining",
+                            fontSize = 11.sp,
+                            color = TextSecondary
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = if (amountLeft >= 0) formatCurrency(amountLeft, currencySymbol) else formatCurrency(-amountLeft, currencySymbol) + " over",
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (amountLeft >= 0) IncomeGreen else ExpenseRed
+                        )
+                    }
+
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            text = "Spent vs Limit",
+                            fontSize = 11.sp,
+                            color = TextSecondary
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "${formatCurrency(totalSpending, currencySymbol)} / ${formatCurrency(totalBudgetLimit, currencySymbol)}",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = TextPrimary
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Elegant Progress bar comparing progress
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    LinearProgressIndicator(
+                        progress = { progress.coerceAtMost(1f) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(10.dp)
+                            .clip(RoundedCornerShape(5.dp)),
+                        color = progressColor,
+                        trackColor = SurfaceBorder
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    val percentString = String.format(Locale.US, "%.1f%% used", progress * 100)
+                    Text(
+                        text = percentString,
+                        fontSize = 11.sp,
+                        color = TextSecondary,
+                        fontWeight = FontWeight.Medium
+                    )
+
+                    val remainingText = if (amountLeft >= 0) {
+                        "${formatCurrency(amountLeft, currencySymbol)} left of your monthly budget limit."
+                    } else {
+                        "Exceeded by ${formatCurrency(-amountLeft, currencySymbol)}!"
+                    }
+                    Text(
+                        text = remainingText,
+                        fontSize = 11.sp,
+                        color = if (amountLeft >= 0) TextSecondary else ExpenseRed,
+                        fontWeight = FontWeight.Medium
                     )
                 }
             }
