@@ -4614,11 +4614,14 @@ fun MonthlyBudgetProgressCard(
     val monthlyBudgets by viewModel.monthlyBudgets.collectAsState()
     val monthlyTransactions by viewModel.monthlyTransactions.collectAsState()
     val currencySymbol by viewModel.currencySymbol.collectAsState()
+    val overallMonthlyBudget by viewModel.overallMonthlyBudget.collectAsState()
 
-    // 1. Calculate aggregated predefined budget limit
+    // 1. Calculate aggregated predefined budget limit or overall limit
     val totalBudgetLimit = remember(monthlyBudgets) {
         monthlyBudgets.sumOf { it.limitAmount }
     }
+    
+    val activeBudgetLimit = if (overallMonthlyBudget > 0.0) overallMonthlyBudget else totalBudgetLimit
 
     // 2. Calculate current month's spending (all EXPENSE transactions)
     val totalSpending = remember(monthlyTransactions) {
@@ -4626,17 +4629,27 @@ fun MonthlyBudgetProgressCard(
     }
 
     // 3. Amount left / remaining
-    val amountLeft = totalBudgetLimit - totalSpending
-    val progress = if (totalBudgetLimit > 0.0) (totalSpending / totalBudgetLimit).toFloat() else 0f
+    val amountLeft = activeBudgetLimit - totalSpending
+    val progress = if (activeBudgetLimit > 0.0) (totalSpending / activeBudgetLimit).toFloat() else 0f
     
     // 4. Color states for visual feedback
-    val isLimitBreached = totalSpending > totalBudgetLimit && totalBudgetLimit > 0
-    val isNearLimit = totalSpending >= (totalBudgetLimit * 0.8) && !isLimitBreached && totalBudgetLimit > 0
+    val isLimitBreached = totalSpending > activeBudgetLimit && activeBudgetLimit > 0
+    val isNearLimit = totalSpending >= (activeBudgetLimit * 0.8) && !isLimitBreached && activeBudgetLimit > 0
 
     val progressColor = when {
         isLimitBreached -> ExpenseRed
         isNearLimit -> NetYellow
         else -> IncomeGreen
+    }
+
+    var isEditingLimit by remember { mutableStateOf(false) }
+    var inputLimitText by remember { mutableStateOf("") }
+
+    // Synchronize inline text field whenever the stored budget updates externally
+    LaunchedEffect(overallMonthlyBudget) {
+        if (!isEditingLimit) {
+            inputLimitText = if (overallMonthlyBudget > 0.0) String.format(Locale.US, "%.2f", overallMonthlyBudget) else ""
+        }
     }
 
     Card(
@@ -4681,7 +4694,7 @@ fun MonthlyBudgetProgressCard(
                             color = TextPrimary
                         )
                         Text(
-                            text = "Overall predefined budget summary",
+                            text = "Set a spending limit to stay on track",
                             fontSize = 11.sp,
                             color = TextSecondary
                         )
@@ -4692,7 +4705,7 @@ fun MonthlyBudgetProgressCard(
                 Box(
                     modifier = Modifier
                         .background(
-                            if (totalBudgetLimit <= 0.0) TextSecondary.copy(alpha = 0.1f)
+                            if (activeBudgetLimit <= 0.0) TextSecondary.copy(alpha = 0.1f)
                             else if (isLimitBreached) ExpenseRed.copy(alpha = 0.15f)
                             else if (isNearLimit) NetYellow.copy(alpha = 0.15f)
                             else IncomeGreen.copy(alpha = 0.15f),
@@ -4701,13 +4714,13 @@ fun MonthlyBudgetProgressCard(
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text(
-                        text = if (totalBudgetLimit <= 0.0) "No Budget"
+                        text = if (activeBudgetLimit <= 0.0) "No Limit"
                                else if (isLimitBreached) "Limit Breached"
                                else if (isNearLimit) "Approaching Limit"
                                else "On Track",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
-                        color = if (totalBudgetLimit <= 0.0) TextSecondary
+                        color = if (activeBudgetLimit <= 0.0) TextSecondary
                                 else if (isLimitBreached) ExpenseRed
                                 else if (isNearLimit) NetYellow
                                 else IncomeGreen
@@ -4715,30 +4728,155 @@ fun MonthlyBudgetProgressCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            if (totalBudgetLimit <= 0.0) {
-                // If no budget limit has been set, guide the user elegantly with a button to go set one
+            // Interactive Inline Budget Input Field
+            if (isEditingLimit) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = inputLimitText,
+                        onValueChange = { inputLimitText = it },
+                        placeholder = { Text("Limit Amount", color = TextSecondary) },
+                        leadingIcon = { Text(currencySymbol, color = NetYellow, fontWeight = FontWeight.Bold) },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Number,
+                            imeAction = androidx.compose.ui.text.input.ImeAction.Done
+                        ),
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                            onDone = {
+                                val amt = inputLimitText.toDoubleOrNull() ?: 0.0
+                                viewModel.updateOverallMonthlyBudget(amt)
+                                isEditingLimit = false
+                            }
+                        ),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedBorderColor = NetYellow,
+                            unfocusedBorderColor = SurfaceBorder,
+                            focusedLabelColor = NetYellow,
+                            unfocusedLabelColor = TextSecondary,
+                            focusedContainerColor = Color.Transparent,
+                            unfocusedContainerColor = Color.Transparent
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(56.dp)
+                            .testTag("inline_budget_limit_input")
+                    )
+
+                    IconButton(
+                        onClick = {
+                            val amt = inputLimitText.toDoubleOrNull() ?: 0.0
+                            viewModel.updateOverallMonthlyBudget(amt)
+                            isEditingLimit = false
+                        },
+                        modifier = Modifier.testTag("save_inline_budget_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "Save Limit",
+                            tint = IncomeGreen,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+
+                    IconButton(
+                        onClick = {
+                            inputLimitText = if (overallMonthlyBudget > 0.0) String.format(Locale.US, "%.2f", overallMonthlyBudget) else ""
+                            isEditingLimit = false
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Cancel Editing",
+                            tint = ExpenseRed,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { isEditingLimit = true }
+                            .padding(vertical = 4.dp, horizontal = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Set/Edit Limit",
+                            tint = NetYellow,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        val limitValueText = if (activeBudgetLimit > 0.0) {
+                            if (overallMonthlyBudget > 0.0) {
+                                "${formatCurrency(overallMonthlyBudget, currencySymbol)} (Monthly Limit)"
+                            } else {
+                                "${formatCurrency(totalBudgetLimit, currencySymbol)} (Sum of Categories)"
+                            }
+                        } else {
+                            "Monthly Spending Limit Not Set"
+                        }
+                        Text(
+                            text = limitValueText,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (activeBudgetLimit > 0.0) NetYellow else TextSecondary,
+                            modifier = Modifier.testTag("budget_limit_display")
+                        )
+                    }
+                    
+                    if (overallMonthlyBudget > 0.0) {
+                        TextButton(
+                            onClick = { 
+                                viewModel.updateOverallMonthlyBudget(0.0)
+                                inputLimitText = ""
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp),
+                            modifier = Modifier.height(28.dp).testTag("clear_overall_budget")
+                        ) {
+                            Text("Clear", color = ExpenseRed, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (activeBudgetLimit <= 0.0) {
+                // If no budget limit has been set, guide the user elegantly with an inline quick-set
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        text = "Establish your first budget goal to actively monitor spending limit tracks.",
+                        text = "Establish a monthly spending limit above to actively track and limit your expenses.",
                         fontSize = 12.sp,
                         color = TextSecondary,
                         modifier = Modifier.weight(1f)
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Button(
-                        onClick = { onSetBudgetClick?.invoke() ?: viewModel.selectTab("Budget") },
+                        onClick = { isEditingLimit = true },
                         colors = ButtonDefaults.buttonColors(containerColor = NetYellow),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                         shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.height(32.dp)
+                        modifier = Modifier.height(32.dp).testTag("quick_set_budget_button")
                     ) {
-                        Text("Set Budget", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("Set Limit", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             } else {
@@ -4771,7 +4909,7 @@ fun MonthlyBudgetProgressCard(
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "${formatCurrency(totalSpending, currencySymbol)} / ${formatCurrency(totalBudgetLimit, currencySymbol)}",
+                            text = "${formatCurrency(totalSpending, currencySymbol)} / ${formatCurrency(activeBudgetLimit, currencySymbol)}",
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = TextPrimary
@@ -4788,7 +4926,8 @@ fun MonthlyBudgetProgressCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(10.dp)
-                            .clip(RoundedCornerShape(5.dp)),
+                            .clip(RoundedCornerShape(5.dp))
+                            .testTag("overall_budget_progress_bar"),
                         color = progressColor,
                         trackColor = SurfaceBorder
                     )

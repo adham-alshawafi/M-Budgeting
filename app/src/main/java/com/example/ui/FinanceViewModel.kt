@@ -322,6 +322,14 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         _budgetAlertsEnabled.value = enabled
     }
 
+    private val _overallMonthlyBudget = MutableStateFlow(sharedPrefs.getFloat("overall_monthly_budget", 0.0f).toDouble())
+    val overallMonthlyBudget: StateFlow<Double> = _overallMonthlyBudget.asStateFlow()
+
+    fun updateOverallMonthlyBudget(budget: Double) {
+        _overallMonthlyBudget.value = budget
+        sharedPrefs.edit().putFloat("overall_monthly_budget", budget.toFloat()).apply()
+    }
+
     fun clearAllData() {
         viewModelScope.launch {
             rawTransactions.value.forEach {
