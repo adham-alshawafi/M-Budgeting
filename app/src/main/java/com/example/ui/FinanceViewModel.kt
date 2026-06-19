@@ -206,6 +206,28 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         _selectedDate.value = date
     }
 
+    // Editing Transaction State
+    private val _editingTransaction = MutableStateFlow<com.example.data.TransactionEntity?>(null)
+    val editingTransaction: StateFlow<com.example.data.TransactionEntity?> = _editingTransaction.asStateFlow()
+
+    fun startEditingTransaction(transaction: com.example.data.TransactionEntity) {
+        // Find the raw version in case it's converted by currency
+        viewModelScope.launch {
+            val raw = repository.getTransactionBySyncId(transaction.syncId)
+            if (raw != null) {
+                // Determine the amount in selected currency for display/edit matching view exchange
+                val rate = getExchangeRateFor(_selectedCurrencyCode.value)
+                _editingTransaction.value = raw.copy(amount = raw.amount * rate)
+            } else {
+                _editingTransaction.value = transaction
+            }
+        }
+    }
+
+    fun stopEditingTransaction() {
+        _editingTransaction.value = null
+    }
+
     // Raw database transactions
     private val rawTransactions: StateFlow<List<TransactionEntity>> = repository.allTransactions
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -287,48 +309,72 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    // Account Balances State Flow - Dynamically tracks Cash, Credit, Saving with transfer support
-    val accountBalances: StateFlow<AccountBalances> = allTransactions.map { list ->
-        var cash = 0.0
-        var credit = 0.0
-        var saving = 0.0
-        
+    // Dynamic Accounts Configuration & Management
+    private val defaultAccounts = listOf("Cash", "Saving", "Credit")
+
+    private val _accounts = MutableStateFlow(loadCategories("accounts_list", defaultAccounts))
+    val accounts: StateFlow<List<String>> = _accounts.asStateFlow()
+
+    fun addAccount(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isNotEmpty() && trimmed !in _accounts.value) {
+            val newList = _accounts.value + trimmed
+            _accounts.value = newList
+            saveCategories("accounts_list", newList)
+        }
+    }
+
+    fun deleteAccount(name: String) {
+        val newList = _accounts.value.filter { it != name }
+        _accounts.value = newList
+        saveCategories("accounts_list", newList)
+    }
+
+    fun renameAccount(oldName: String, newName: String) {
+        val trimmed = newName.trim()
+        if (trimmed.isNotEmpty() && oldName in _accounts.value && trimmed !in _accounts.value) {
+            val newList = _accounts.value.map { if (it == oldName) trimmed else it }
+            _accounts.value = newList
+            saveCategories("accounts_list", newList)
+        }
+    }
+
+    // Dynamic Account Balances Map
+    val dynamicAccountBalances: StateFlow<Map<String, Double>> = combine(allTransactions, accounts) { list, accList ->
+        val balancesMap = accList.associateWith { 0.0 }.toMutableMap()
         list.filter { !it.isDeleted }.forEach { t ->
             val amt = t.amount
-            
-            // Process source account
             when (t.type) {
                 "INCOME" -> {
-                    when (t.account) {
-                        "Cash" -> cash += amt
-                        "Credit" -> credit += amt
-                        "Saving" -> saving += amt
-                    }
+                    val current = balancesMap[t.account] ?: 0.0
+                    balancesMap[t.account] = current + amt
                 }
                 "EXPENSE" -> {
-                    when (t.account) {
-                        "Cash" -> cash -= amt
-                        "Credit" -> credit -= amt
-                        "Saving" -> saving -= amt
-                    }
+                    val current = balancesMap[t.account] ?: 0.0
+                    balancesMap[t.account] = current - amt
                 }
                 "TRANSFER" -> {
                     // Subtract from source
-                    when (t.account) {
-                        "Cash" -> cash -= amt
-                        "Credit" -> credit -= amt
-                        "Saving" -> saving -= amt
-                    }
+                    val currentSrc = balancesMap[t.account] ?: 0.0
+                    balancesMap[t.account] = currentSrc - amt
                     // Add to destination
-                    when (t.toAccount) {
-                        "Cash" -> cash += amt
-                        "Credit" -> credit += amt
-                        "Saving" -> saving += amt
+                    if (t.toAccount != null) {
+                        val currentDst = balancesMap[t.toAccount] ?: 0.0
+                        balancesMap[t.toAccount] = currentDst + amt
                     }
                 }
             }
         }
-        AccountBalances(cash = cash, credit = credit, saving = saving)
+        balancesMap
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+    // Account Balances State Flow - For backward compatibility and existing hardcoded panels
+    val accountBalances: StateFlow<AccountBalances> = dynamicAccountBalances.map { map ->
+        AccountBalances(
+            cash = map["Cash"] ?: 0.0,
+            credit = map["Credit"] ?: 0.0,
+            saving = map["Saving"] ?: 0.0
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AccountBalances())
 
     // Filtering States
@@ -441,6 +487,326 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         sharedPrefs.edit().putFloat("overall_monthly_budget", budget.toFloat()).apply()
     }
 
+    // Redesigned Settings States
+    // 1. Profile
+    private val _profileName = MutableStateFlow(sharedPrefs.getString("profile_name", "Adham Alshawafi") ?: "Adham Alshawafi")
+    val profileName: StateFlow<String> = _profileName.asStateFlow()
+    fun setProfileName(name: String) {
+        _profileName.value = name
+        sharedPrefs.edit().putString("profile_name", name).apply()
+    }
+
+    private val _profileEmail = MutableStateFlow(sharedPrefs.getString("profile_email", "adhamalshawafi@gmail.com") ?: "adhamalshawafi@gmail.com")
+    val profileEmail: StateFlow<String> = _profileEmail.asStateFlow()
+    fun setProfileEmail(email: String) {
+        _profileEmail.value = email
+        sharedPrefs.edit().putString("profile_email", email).apply()
+    }
+
+    // 2. Currency & Region
+    private val _numberFormat = MutableStateFlow(sharedPrefs.getString("number_format", "Standard (1,234.56)") ?: "Standard (1,234.56)")
+    val numberFormat: StateFlow<String> = _numberFormat.asStateFlow()
+    fun setNumberFormat(format: String) {
+        _numberFormat.value = format
+        sharedPrefs.edit().putString("number_format", format).apply()
+    }
+
+    private val _firstDayOfWeek = MutableStateFlow(sharedPrefs.getString("first_day_of_week", "Sunday") ?: "Sunday")
+    val firstDayOfWeek: StateFlow<String> = _firstDayOfWeek.asStateFlow()
+    fun setFirstDayOfWeek(day: String) {
+        _firstDayOfWeek.value = day
+        sharedPrefs.edit().putString("first_day_of_week", day).apply()
+    }
+
+    // 3. Budget Defaults
+    private val _budgetCycle = MutableStateFlow(sharedPrefs.getString("budget_cycle", "Monthly") ?: "Monthly")
+    val budgetCycle: StateFlow<String> = _budgetCycle.asStateFlow()
+    fun setBudgetCycle(cycle: String) {
+        _budgetCycle.value = cycle
+        sharedPrefs.edit().putString("budget_cycle", cycle).apply()
+    }
+
+    private val _rolloverEnabled = MutableStateFlow(sharedPrefs.getBoolean("budget_rollover_enabled", false))
+    val rolloverEnabled: StateFlow<Boolean> = _rolloverEnabled.asStateFlow()
+    fun setRolloverEnabled(enabled: Boolean) {
+        _rolloverEnabled.value = enabled
+        sharedPrefs.edit().putBoolean("budget_rollover_enabled", enabled).apply()
+    }
+
+    private val _overspendingThreshold = MutableStateFlow(sharedPrefs.getFloat("overspending_threshold", 80.0f).toDouble())
+    val overspendingThreshold: StateFlow<Double> = _overspendingThreshold.asStateFlow()
+    fun setOverspendingThreshold(value: Double) {
+        _overspendingThreshold.value = value
+        sharedPrefs.edit().putFloat("overspending_threshold", value.toFloat()).apply()
+    }
+
+    // 4. Notifications
+    private val _billRemindersEnabled = MutableStateFlow(sharedPrefs.getBoolean("bill_reminders_enabled", true))
+    val billRemindersEnabled: StateFlow<Boolean> = _billRemindersEnabled.asStateFlow()
+    fun setBillRemindersEnabled(enabled: Boolean) {
+        _billRemindersEnabled.value = enabled
+        sharedPrefs.edit().putBoolean("bill_reminders_enabled", enabled).apply()
+    }
+
+    private val _dailyRecapEnabled = MutableStateFlow(sharedPrefs.getBoolean("daily_recap_enabled", false))
+    val dailyRecapEnabled: StateFlow<Boolean> = _dailyRecapEnabled.asStateFlow()
+    fun setDailyRecapEnabled(enabled: Boolean) {
+        _dailyRecapEnabled.value = enabled
+        sharedPrefs.edit().putBoolean("daily_recap_enabled", enabled).apply()
+    }
+
+    private val _lowBalanceAlertsEnabled = MutableStateFlow(sharedPrefs.getBoolean("low_balance_alerts_enabled", true))
+    val lowBalanceAlertsEnabled: StateFlow<Boolean> = _lowBalanceAlertsEnabled.asStateFlow()
+    fun setLowBalanceAlertsEnabled(enabled: Boolean) {
+        _lowBalanceAlertsEnabled.value = enabled
+        sharedPrefs.edit().putBoolean("low_balance_alerts_enabled", enabled).apply()
+    }
+
+    private val _paymentConfirmationsEnabled = MutableStateFlow(sharedPrefs.getBoolean("payment_confirmations_enabled", true))
+    val paymentConfirmationsEnabled: StateFlow<Boolean> = _paymentConfirmationsEnabled.asStateFlow()
+    fun setPaymentConfirmationsEnabled(enabled: Boolean) {
+        _paymentConfirmationsEnabled.value = enabled
+        sharedPrefs.edit().putBoolean("payment_confirmations_enabled", enabled).apply()
+    }
+
+    // 5. Security
+    private val _appLockEnabled = MutableStateFlow(sharedPrefs.getBoolean("app_lock_enabled", false))
+    val appLockEnabled: StateFlow<Boolean> = _appLockEnabled.asStateFlow()
+    fun setAppLockEnabled(enabled: Boolean) {
+        _appLockEnabled.value = enabled
+        sharedPrefs.edit().putBoolean("app_lock_enabled", enabled).apply()
+    }
+
+    private val _privacyModeEnabled = MutableStateFlow(sharedPrefs.getBoolean("privacy_mode_enabled", false))
+    val privacyModeEnabled: StateFlow<Boolean> = _privacyModeEnabled.asStateFlow()
+    fun setPrivacyModeEnabled(enabled: Boolean) {
+        _privacyModeEnabled.value = enabled
+        sharedPrefs.edit().putBoolean("privacy_mode_enabled", enabled).apply()
+    }
+
+    // 5.5. Transactions Time format
+    private val _showTransactionTime = MutableStateFlow(sharedPrefs.getBoolean("show_transaction_time", true))
+    val showTransactionTime: StateFlow<Boolean> = _showTransactionTime.asStateFlow()
+    fun setShowTransactionTime(enabled: Boolean) {
+        _showTransactionTime.value = enabled
+        sharedPrefs.edit().putBoolean("show_transaction_time", enabled).apply()
+    }
+
+    // 5.6. Tools order (reorder section list)
+    private val _toolsOrder = MutableStateFlow(sharedPrefs.getString("tools_order", "CALCULATOR,WORLD_CLOCK,DATE_CALC,GRAM_SCALE,PREFERENCES") ?: "CALCULATOR,WORLD_CLOCK,DATE_CALC,GRAM_SCALE,PREFERENCES")
+    val toolsOrder: StateFlow<String> = _toolsOrder.asStateFlow()
+    fun setToolsOrder(order: String) {
+        _toolsOrder.value = order
+        sharedPrefs.edit().putString("tools_order", order).apply()
+    }
+
+    // 6. Appearance
+    private val _appThemeSettings = MutableStateFlow(sharedPrefs.getString("app_theme_settings", "Dark") ?: "Dark")
+    val appThemeSettings: StateFlow<String> = _appThemeSettings.asStateFlow()
+    fun setAppThemeSettings(theme: String) {
+        _appThemeSettings.value = theme
+        sharedPrefs.edit().putString("app_theme_settings", theme).apply()
+    }
+
+    private val _accentColorIndex = MutableStateFlow(sharedPrefs.getInt("accent_color_index", 0))
+    val accentColorIndex: StateFlow<Int> = _accentColorIndex.asStateFlow()
+    fun setAccentColorIndex(index: Int) {
+        _accentColorIndex.value = index
+        sharedPrefs.edit().putInt("accent_color_index", index).apply()
+    }
+
+    // 7. Emergency Fund Target
+    private val _emergencyTarget = MutableStateFlow(sharedPrefs.getFloat("emergency_target", 10000.0f).toDouble())
+    val emergencyTarget: StateFlow<Double> = _emergencyTarget.asStateFlow()
+    fun setEmergencyTarget(value: Double) {
+        _emergencyTarget.value = value
+        sharedPrefs.edit().putFloat("emergency_target", value.toFloat()).apply()
+    }
+
+    private val _emergencyCurrent = MutableStateFlow(sharedPrefs.getFloat("emergency_current", 2500.0f).toDouble())
+    val emergencyCurrent: StateFlow<Double> = _emergencyCurrent.asStateFlow()
+    fun setEmergencyCurrent(value: Double) {
+        _emergencyCurrent.value = value
+        sharedPrefs.edit().putFloat("emergency_current", value.toFloat()).apply()
+    }
+
+    private val _emergencyTargetDate = MutableStateFlow(sharedPrefs.getString("emergency_target_date", "2026-12-31") ?: "2026-12-31")
+    val emergencyTargetDate: StateFlow<String> = _emergencyTargetDate.asStateFlow()
+    fun setEmergencyTargetDate(dateStr: String) {
+        _emergencyTargetDate.value = dateStr
+        sharedPrefs.edit().putString("emergency_target_date", dateStr).apply()
+    }
+
+    // 8. Spending Freeze Mode
+    private val _spendingFreezeEnabled = MutableStateFlow(sharedPrefs.getBoolean("spending_freeze_enabled", false))
+    val spendingFreezeEnabled: StateFlow<Boolean> = _spendingFreezeEnabled.asStateFlow()
+    fun setSpendingFreezeEnabled(enabled: Boolean) {
+        _spendingFreezeEnabled.value = enabled
+        sharedPrefs.edit().putBoolean("spending_freeze_enabled", enabled).apply()
+    }
+
+    // 9. Categorization Rules
+    private val _categorizationRules = MutableStateFlow<Map<String, String>>(loadCategorizationRules())
+    val categorizationRules: StateFlow<Map<String, String>> = _categorizationRules.asStateFlow()
+
+    private fun loadCategorizationRules(): Map<String, String> {
+        val raw = sharedPrefs.getString("categorization_rules", "Starbucks:Food,Uber:Transport,Netflix:Entertainment,Rent:Rent") ?: "Starbucks:Food,Uber:Transport,Netflix:Entertainment,Rent:Rent"
+        if (raw.trim().isEmpty()) return emptyMap()
+        return raw.split(",").mapNotNull {
+            val parts = it.split(":")
+            if (parts.size == 2) parts[0] to parts[1] else null
+        }.toMap()
+    }
+
+    private fun saveCategorizationRules(rules: Map<String, String>) {
+        val serialized = rules.entries.joinToString(",") { "${it.key}:${it.value}" }
+        sharedPrefs.edit().putString("categorization_rules", serialized).apply()
+    }
+
+    fun addCategorizationRule(keyword: String, category: String) {
+        val map = _categorizationRules.value.toMutableMap()
+        map[keyword] = category
+        _categorizationRules.value = map
+        saveCategorizationRules(map)
+    }
+
+    fun deleteCategorizationRule(keyword: String) {
+        val map = _categorizationRules.value.toMutableMap()
+        map.remove(keyword)
+        _categorizationRules.value = map
+        saveCategorizationRules(map)
+    }
+
+    // Suggested category engine helper
+    fun suggestCategory(title: String): String? {
+        val normalizedTitle = title.trim().lowercase()
+        _categorizationRules.value.forEach { (keyword, cat) ->
+            if (normalizedTitle.contains(keyword.lowercase())) {
+                return cat
+            }
+        }
+        return null
+    }
+
+    // 10. Feedback suggestions & upvotes
+    private val _votedFeedbacks = MutableStateFlow(sharedPrefs.getStringSet("voted_feedbacks", emptySet()) ?: emptySet())
+    val votedFeedbacks: StateFlow<Set<String>> = _votedFeedbacks.asStateFlow()
+
+    private val _feedbacksList = MutableStateFlow<List<FeedbackSuggestion>>(loadFeedbackList())
+    val feedbacksList: StateFlow<List<FeedbackSuggestion>> = _feedbacksList.asStateFlow()
+
+    private fun loadFeedbackList(): List<FeedbackSuggestion> {
+        val raw = sharedPrefs.getString("feedback_list", null)
+        if (raw == null) {
+            return listOf(
+                FeedbackSuggestion("1", "Detailed PDF Reports", "Allow downloading beautiful visual charts as PDF.", 15),
+                FeedbackSuggestion("2", "Splitwise Integration", "Import shared expenses automatically from Splitwise.", 9),
+                FeedbackSuggestion("3", "AI Budget Advisor", "Receive personalized tips based on quarterly spending trends.", 24),
+                FeedbackSuggestion("4", "Cryptocurrency wallets", "Check balance of Bitcoin/Ethereum automatically.", 5)
+            )
+        }
+        return try {
+            raw.split("|||").mapNotNull {
+                val parts = it.split(":::")
+                if (parts.size == 4) {
+                    FeedbackSuggestion(parts[0], parts[1], parts[2], parts[3].toIntOrNull() ?: 0)
+                } else null
+            }
+        } catch(e: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun saveFeedbackList(list: List<FeedbackSuggestion>) {
+        val serialized = list.joinToString("|||") { "${it.id}:::${it.title}:::${it.description}:::${it.votes}" }
+        sharedPrefs.edit().putString("feedback_list", serialized).apply()
+    }
+
+    fun upvoteFeedback(id: String) {
+        val voted = _votedFeedbacks.value.toMutableSet()
+        val list = _feedbacksList.value.map {
+            if (it.id == id) {
+                if (id in voted) {
+                    voted.remove(id)
+                    it.copy(votes = it.votes - 1)
+                } else {
+                    voted.add(id)
+                    it.copy(votes = it.votes + 1)
+                }
+            } else it
+        }
+        _votedFeedbacks.value = voted
+        sharedPrefs.edit().putStringSet("voted_feedbacks", voted).apply()
+        _feedbacksList.value = list
+        saveFeedbackList(list)
+    }
+
+    fun addFeedback(title: String, description: String) {
+        val id = java.util.UUID.randomUUID().toString()
+        val item = FeedbackSuggestion(id, title, description, 1)
+        val newList = _feedbacksList.value + item
+        _feedbacksList.value = newList
+        saveFeedbackList(newList)
+        
+        val voted = _votedFeedbacks.value.toMutableSet()
+        voted.add(id)
+        _votedFeedbacks.value = voted
+        sharedPrefs.edit().putStringSet("voted_feedbacks", voted).apply()
+    }
+
+    fun resetCategoriesToDefault() {
+        _expenseCategories.value = defaultExpenseCategories
+        saveCategories("expense_categories", defaultExpenseCategories)
+        _incomeCategories.value = defaultIncomeCategories
+        saveCategories("income_categories", defaultIncomeCategories)
+    }
+
+    fun resetBudgets() {
+        viewModelScope.launch {
+            repository.getAllBudgetsForSync().forEach {
+                repository.deleteBudgetById(it.id)
+            }
+            updateOverallMonthlyBudget(0.0)
+            _emergencyTarget.value = 10000.0
+            _emergencyCurrent.value = 2500.0
+            sharedPrefs.edit().putFloat("emergency_target", 10000.0f).putFloat("emergency_current", 2500.0f).apply()
+        }
+    }
+
+    fun resetToFactoryDefault() {
+        viewModelScope.launch {
+            clearAllData()
+            sharedPrefs.edit().clear().apply()
+            
+            _profileName.value = "Adham Alshawafi"
+            _profileEmail.value = "adhamalshawafi@gmail.com"
+            _numberFormat.value = "Standard (1,234.56)"
+            _firstDayOfWeek.value = "Sunday"
+            _budgetCycle.value = "Monthly"
+            _rolloverEnabled.value = false
+            _overspendingThreshold.value = 80.0
+            _billRemindersEnabled.value = true
+            _dailyRecapEnabled.value = false
+            _lowBalanceAlertsEnabled.value = true
+            _paymentConfirmationsEnabled.value = true
+            _appLockEnabled.value = false
+            _privacyModeEnabled.value = false
+            _showTransactionTime.value = true
+            _toolsOrder.value = "CALCULATOR,WORLD_CLOCK,DATE_CALC,GRAM_SCALE,PREFERENCES"
+            _appThemeSettings.value = "Dark"
+            _accentColorIndex.value = 0
+            _emergencyTarget.value = 10000.0
+            _emergencyCurrent.value = 2500.0
+            _emergencyTargetDate.value = "2026-12-31"
+            _spendingFreezeEnabled.value = false
+            _categorizationRules.value = loadCategorizationRules()
+            _votedFeedbacks.value = emptySet()
+            _feedbacksList.value = loadFeedbackList()
+            
+            resetCategoriesToDefault()
+        }
+    }
+
     fun clearAllData() {
         viewModelScope.launch {
             rawTransactions.value.forEach {
@@ -449,6 +815,13 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             allNotes.value.forEach {
                 repository.deleteNoteById(it.id)
             }
+            repository.getAllBudgetsForSync().forEach {
+                repository.deleteBudgetById(it.id)
+            }
+            repository.getAllRecurringTransactionsForSync().forEach {
+                repository.deleteRecurringTransactionById(it.id)
+            }
+            updateOverallMonthlyBudget(0.0)
         }
     }
 
@@ -631,6 +1004,29 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     notes = notes,
                     account = account,
                     toAccount = toAccount
+                )
+            )
+            triggerSyncIfEnabled()
+        }
+    }
+
+    fun updateTransaction(id: Int, title: String, amount: Double, type: String, category: String, notes: String, account: String = "Cash", toAccount: String? = null, timestamp: Long = System.currentTimeMillis(), syncId: String) {
+        viewModelScope.launch {
+            val rate = getExchangeRateFor(_selectedCurrencyCode.value)
+            val baseAmount = amount / rate
+            repository.insertTransaction(
+                TransactionEntity(
+                    id = id,
+                    title = title,
+                    amount = baseAmount,
+                    type = type,
+                    category = category,
+                    timestamp = timestamp,
+                    notes = notes,
+                    account = account,
+                    toAccount = toAccount,
+                    syncId = syncId,
+                    lastModified = System.currentTimeMillis()
                 )
             )
             triggerSyncIfEnabled()
@@ -835,4 +1231,11 @@ data class BudgetAlert(
     val thresholdPercent: Double,
     val actualPercent: Double,
     val isBreached: Boolean
+)
+
+data class FeedbackSuggestion(
+    val id: String,
+    val title: String,
+    val description: String,
+    val votes: Int
 )

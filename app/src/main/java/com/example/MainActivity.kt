@@ -64,7 +64,8 @@ class MainActivity : ComponentActivity() {
                 onShowSettings = { showSettingsDialog = true }
               )
               "Calendar" -> CalendarTabScreen(
-                viewModel = viewModel
+                viewModel = viewModel,
+                onShowAddTransaction = { showAddTransaction = true }
               )
               "Monthly" -> MonthlyTabScreen(
                 viewModel = viewModel
@@ -86,6 +87,30 @@ class MainActivity : ComponentActivity() {
                 onDismiss = { showAddTransaction = false },
                 onSave = { title, amount, type, category, notes, account, toAccount, timestamp ->
                   viewModel.addTransaction(title, amount, type, category, notes, account, toAccount, timestamp)
+                }
+              )
+            }
+
+            val editingTransaction by viewModel.editingTransaction.collectAsState()
+            if (editingTransaction != null) {
+              AddTransactionDialog(
+                viewModel = viewModel,
+                editingTransaction = editingTransaction,
+                onDismiss = { viewModel.stopEditingTransaction() },
+                onSave = { title, amount, type, category, notes, account, toAccount, timestamp ->
+                  viewModel.updateTransaction(
+                    id = editingTransaction!!.id,
+                    title = title,
+                    amount = amount,
+                    type = type,
+                    category = category,
+                    notes = notes,
+                    account = account,
+                    toAccount = toAccount,
+                    timestamp = timestamp,
+                    syncId = editingTransaction!!.syncId
+                  )
+                  viewModel.stopEditingTransaction()
                 }
               )
             }
@@ -145,6 +170,7 @@ class MainActivity : ComponentActivity() {
 
             if (showAddBudget) {
               AddBudgetDialog(
+                viewModel = viewModel,
                 onDismiss = { showAddBudget = false },
                 onSave = { category, limit, alertThreshold ->
                   viewModel.addBudget(category, limit, alertThreshold)
